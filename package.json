@@ -1,0 +1,17 @@
+{
+  "name": "me.dasfaust.pixelengine",
+  "version": "1.0.0",
+  "displayName": "PixelEngine",
+  "description": "A Unity package that aims to help replicate t3ssel8r's 3D pixel art",
+  "unity": "2022.3",
+  "documentationUrl": "https://github.com/Dasfaust/PixelEngine",
+  "changelogUrl": "https://github.com/Dasfaust/PixelEngine/commits/main/",
+  "licensesUrl": "https://raw.githubusercontent.com/Dasfaust/PixelEngine/main/LICENSE",
+  "dependencies": {},
+ "keywords": [],
+  "author": {
+    "name": "Cody Caudill",
+    "email": "github.com.matchbook049@passmail.net",
+    "url": "https://github.com/Dasfaust"
+  }
+}
