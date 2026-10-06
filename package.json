@@ -2,13 +2,22 @@
   "name": "me.dasfaust.pixelengine",
   "version": "1.0.0",
   "displayName": "PixelEngine",
-  "description": "A Unity package that aims to help replicate t3ssel8r's 3D pixel art",
+  "description": "Sub-pixel pixel-art orthographic camera system for Unity: render-to-texture, pixel-grid snapping, and parallax background cameras.",
   "unity": "2022.3",
   "documentationUrl": "https://github.com/Dasfaust/PixelEngine",
   "changelogUrl": "https://github.com/Dasfaust/PixelEngine/commits/main/",
   "licensesUrl": "https://raw.githubusercontent.com/Dasfaust/PixelEngine/main/LICENSE",
-  "dependencies": {},
- "keywords": [],
+  "dependencies": {
+    "com.unity.mathematics": "1.2.1",
+    "com.unity.ugui": "2.0.0"
+  },
+  "keywords": [
+    "camera",
+    "pixel-art",
+    "orthographic",
+    "sub-pixel",
+    "render"
+  ],
   "author": {
     "name": "Cody Caudill",
     "email": "github.com.matchbook049@passmail.net",
