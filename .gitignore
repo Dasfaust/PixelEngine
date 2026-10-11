@@ -71,4 +71,7 @@ crashlytics-build.properties
 /[Aa]ssets/[Ss]treamingAssets/aa.meta
 /[Aa]ssets/[Ss]treamingAssets/aa/*
 
-*.meta
+# Track every .meta. Unity writes one per asset, and the GUID inside it is the
+# only link a material, a scene, or a prefab has to this package's shaders and
+# MonoBehaviours. Ignore a .meta and each clone invents a new GUID, so the host
+# project loses its shader and component references on a fresh clone.
