@@ -52,6 +52,13 @@ namespace PixelEngine.Presentation
             if (renderResolution.x % 2 != 0) renderResolution.x++;
             if (renderResolution.y % 2 != 0) renderResolution.y++;
 
+            // The same edge margin as the main camera (SubpixelCameraBase
+            // .EdgeMarginTexels), so the background window keeps the clean
+            // screen-ratio inside the grown texture and the parallax window
+            // sizes stay what they were before the margin.
+            renderResolution.x += (int)SubpixelCameraBase.EdgeMarginTexels * 2;
+            renderResolution.y += (int)SubpixelCameraBase.EdgeMarginTexels * 2;
+
             if (renderTexture != null)
             {
                 renderTexture.Release();
@@ -106,6 +113,7 @@ namespace PixelEngine.Presentation
             {
                 viewportMaterial.SetVector("_SubPixelOffset", _SubPixelOffset);
                 viewportMaterial.SetFloat("_ZoomLevel", 1.0f + (parentCamera.GetUVZoomLevel() * cameraConfig.backgroundParallaxModifier));
+                viewportMaterial.SetFloat("_EdgeMargin", SubpixelCameraBase.EdgeMarginTexels);
             }
         }
         

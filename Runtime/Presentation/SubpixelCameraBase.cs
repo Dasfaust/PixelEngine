@@ -29,6 +29,19 @@ namespace PixelEngine.Presentation
         protected float3 referencePosition = float3.zero;
 
         /// <summary>
+        /// The edge margin the render texture carries on every edge, in texels.
+        /// The render texture is the screen-ratio window plus 2x this many texels,
+        /// and the viewport material samples the inner window (the shader's
+        /// _EdgeMargin must equal this number; ApplyViewportMaterial pushes it).
+        /// The subpixel offset slides the window inside the margin, so it never
+        /// samples past a texture edge at any zoom — at 1:1 the window fills the
+        /// screen-ratio rect and the margin absorbs the whole offset.
+        /// Two texels cover the maximum offset (one texel) with bilinear headroom.
+        /// The picking seam mirrors this number.
+        /// </summary>
+        public const float EdgeMarginTexels = 2f;
+
+        /// <summary>
         /// The decoupling seam: companion components and game code subscribe to this instead
         /// of the camera referencing them. Invoked whenever the camera's stable reference
         /// position is updated (orthographic: after the pivot snap; perspective: every frame,
@@ -116,13 +129,17 @@ namespace PixelEngine.Presentation
             
             Rect uvRect = outputImage.uvRect;
             
+            // Mirror of the viewport shader window: window size = (1 - 2*margin/texels) / Z,
+            // centered, plus the subpixel offset. The shader reads
+            // adjustedUv = (uv - 0.5)/Z * windowSize + 0.5 + offset, so a screen
+            // position maps through this rect onto exactly the texels the shader samples.
             var zoomPercentage = 1.0f / _ZoomLevel;
-            uvRect.width = zoomPercentage;
-            uvRect.height = zoomPercentage;
-            uvRect.x = (1.0f - zoomPercentage) * 0.5f;
-            uvRect.y = (1.0f - zoomPercentage) * 0.5f;
-            uvRect.x += _SubPixelOffset.x;
-            uvRect.y += _SubPixelOffset.y;
+            var windowSizeX = 1.0f - 2.0f * EdgeMarginTexels / renderResolution.x;
+            var windowSizeY = 1.0f - 2.0f * EdgeMarginTexels / renderResolution.y;
+            uvRect.width = windowSizeX * zoomPercentage;
+            uvRect.height = windowSizeY * zoomPercentage;
+            uvRect.x = 0.5f - uvRect.width * 0.5f + _SubPixelOffset.x;
+            uvRect.y = 0.5f - uvRect.height * 0.5f + _SubPixelOffset.y;
             
             float2 correctedUV = new float2(
                 uvRect.x + rawUV.x * uvRect.width,
@@ -170,6 +187,14 @@ namespace PixelEngine.Presentation
             if (renderResolution.x % 2 != 0) renderResolution.x++;
             if (renderResolution.y % 2 != 0) renderResolution.y++;
 
+            // The margin: the render texture carries EdgeMarginTexels per edge
+            // beyond the screen-ratio window, so the viewport window samples real
+            // texels at every zoom. The camera formulas (orthographic size) read
+            // this grown size, so the camera renders exactly the grown region and
+            // the window stays the clean ratio inside it.
+            renderResolution.x += (int)EdgeMarginTexels * 2;
+            renderResolution.y += (int)EdgeMarginTexels * 2;
+
             if (renderTexture != null)
             {
                 renderTexture.Release();
@@ -200,6 +225,8 @@ namespace PixelEngine.Presentation
         /// <summary>
         /// Push the sub-pixel uniform contract to the viewport material.
         /// Keep in sync with PixelEngineShader (see package README "Shader contract").
+        /// The margin the shader window needs is pushed here, so the material can
+        /// never disagree with the render texture the camera built.
         /// </summary>
         protected void ApplyViewportMaterial()
         {
@@ -207,6 +234,7 @@ namespace PixelEngine.Presentation
             {
                 viewportMaterial.SetVector("_SubPixelOffset", _SubPixelOffset);
                 viewportMaterial.SetFloat("_ZoomLevel", _ZoomLevel);
+                viewportMaterial.SetFloat("_EdgeMargin", EdgeMarginTexels);
             }
         }
 
