@@ -43,12 +43,14 @@ Per-method documentation is pending — see the source for now.
 The blit/viewport material must expose these uniforms (see the companion `PixelEngineShader` package):
 - `_SubPixelOffset` (`Vector4`) — sub-pixel correction offset.
 - `_ZoomLevel` (`float`) — current zoom factor.
+- `_EdgeMargin` (`float`) — the texel margin the window math needs; the camera pushes `SubpixelCameraBase.EdgeMarginTexels`, and the shader samples the inner window `1 − 2 × margin / texels` so the offset never slides past a texture edge.
 
 Keep the C# and the shader in sync on these names.
 
 ## Core formulas
 - `orthographicSize = renderResolution.y * 0.5 / pixelsPerUnit`
 - `unitsPerPixel = 1 / pixelsPerUnit`
+- `renderResolution = screen / divisor` rounded up to even, **plus** `2 × EdgeMarginTexels` — the render texture carries the margin, the viewport samples the clean screen-ratio window inside it (`windowUV = 1 − 2 × margin / texels`, scaled by `1 / zoom`, offset by `_SubPixelOffset`).
 - Target **64 pixels per unit**.
 
 ## Consuming from a game
