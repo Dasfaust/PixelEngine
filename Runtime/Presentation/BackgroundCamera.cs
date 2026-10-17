@@ -46,8 +46,12 @@ namespace PixelEngine.Presentation
 
             screenSize.x = Screen.width;
             screenSize.y = Screen.height;
-            renderResolution.x = screenSize.x / cameraConfig.backgroundDownscaleRatio;
-            renderResolution.y = screenSize.y / cameraConfig.backgroundDownscaleRatio;
+            // The same render scale as the parent camera: when the parent renders
+            // twice the screen for the overview mode, the background texture grows
+            // with it, so the parallax windows keep their relative sizes.
+            int parentScale = parentCamera != null ? parentCamera.GetRenderScale() : 1;
+            renderResolution.x = screenSize.x / cameraConfig.backgroundDownscaleRatio * parentScale;
+            renderResolution.y = screenSize.y / cameraConfig.backgroundDownscaleRatio * parentScale;
             
             if (renderResolution.x % 2 != 0) renderResolution.x++;
             if (renderResolution.y % 2 != 0) renderResolution.y++;
