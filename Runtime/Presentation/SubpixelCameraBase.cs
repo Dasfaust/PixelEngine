@@ -98,6 +98,112 @@ namespace PixelEngine.Presentation
             referencePosition = position;
         }
 
+        // --- Orientation lock ---------------------------------------------------
+        // README rule: "The render camera's rotation is also locked to 30-90 degrees on
+        // pitch, and 45 degree increments on yaw." The package enforces it. A parented
+        // camera, an animation clip, or a game-side tween can write any rotation for one
+        // frame; the lock below quantizes it back inside LateUpdate, the same per-frame
+        // slot as the pivot snap, so the screen never renders an unlocked angle.
+        // Roll is locked to 0 with them: the pitch/yaw rule describes an upright camera,
+        // and a rolled camera breaks the screen-plane axis projection the pivot snap uses.
+
+        private const float DefaultMinPitch = 30f;
+        private const float DefaultMaxPitch = 90f;
+        private const float DefaultYawStep = 45f;
+
+        public float GetMinPitchDegrees()
+        {
+            return cameraConfig != null ? cameraConfig.minPitchDegrees : DefaultMinPitch;
+        }
+
+        public float GetMaxPitchDegrees()
+        {
+            return cameraConfig != null ? cameraConfig.maxPitchDegrees : DefaultMaxPitch;
+        }
+
+        public float GetYawStepDegrees()
+        {
+            return cameraConfig != null ? cameraConfig.yawStepDegrees : DefaultYawStep;
+        }
+
+        /// <summary>Pitch inside the authored range. Values outside it land on the nearer end.</summary>
+        public float ClampPitch(float pitchDegrees)
+        {
+            return math.clamp(pitchDegrees, GetMinPitchDegrees(), GetMaxPitchDegrees());
+        }
+
+        /// <summary>Yaw quantized onto the authored step grid.</summary>
+        public float SnapYaw(float yawDegrees)
+        {
+            float step = GetYawStepDegrees();
+            if (step <= 0f)
+            {
+                return yawDegrees;
+            }
+            return math.round(yawDegrees / step) * step;
+        }
+
+        /// <summary>The camera's live pitch in degrees, normalized to (-180, 180].</summary>
+        public float GetPitch()
+        {
+            return NormalizeAngle(transform.eulerAngles.x);
+        }
+
+        /// <summary>The camera's live yaw in degrees, normalized to (-180, 180].</summary>
+        public float GetYaw()
+        {
+            return NormalizeAngle(transform.eulerAngles.y);
+        }
+
+        /// <summary>Set pitch to a clamped value; yaw and roll keep their locked form.</summary>
+        public void SetPitch(float pitchDegrees)
+        {
+            SetOrientation(ClampPitch(pitchDegrees), GetYaw());
+        }
+
+        /// <summary>Set yaw to a snapped value; pitch and roll keep their locked form.</summary>
+        public void SetYaw(float yawDegrees)
+        {
+            SetOrientation(GetPitch(), SnapYaw(yawDegrees));
+        }
+
+        /// <summary>Turn by a whole count of yaw steps (Q/E input calls this).</summary>
+        public void StepYaw(int steps)
+        {
+            SetYaw(GetYaw() + steps * GetYawStepDegrees());
+        }
+
+        private static float NormalizeAngle(float degrees)
+        {
+            while (degrees > 180f) degrees -= 360f;
+            while (degrees <= -180f) degrees += 360f;
+            return degrees;
+        }
+
+        private void SetOrientation(float pitch, float yaw)
+        {
+            yaw = SnapYaw(NormalizeAngle(yaw));
+            transform.rotation = Quaternion.Euler(ClampPitch(pitch), NormalizeAngle(yaw), 0f);
+        }
+
+        /// <summary>
+        /// Quantize the live rotation back inside the lock. Runs every frame before the
+        /// pivot snap, so the pivot snap projects onto the locked axes, never onto an
+        /// angle the lock is about to discard.
+        /// </summary>
+        protected void ApplyOrientationLock()
+        {
+            float pitch = NormalizeAngle(transform.eulerAngles.x);
+            float yaw = NormalizeAngle(transform.eulerAngles.y);
+            float lockedPitch = ClampPitch(pitch);
+            float lockedYaw = SnapYaw(yaw);
+            if (math.abs(pitch - lockedPitch) > 0.01f ||
+                math.abs(yaw - lockedYaw) > 0.01f)
+            {
+                transform.rotation = Quaternion.Euler(lockedPitch, NormalizeAngle(lockedYaw), 0f);
+            }
+        }
+
         public float2 GetAdjustedViewportPosition(float2 position)
         {
             Vector2 localPoint;
@@ -220,6 +326,7 @@ namespace PixelEngine.Presentation
 
         public void LateUpdate()
         {
+            ApplyOrientationLock();
             SnapToPixelGrid();
         }
 
