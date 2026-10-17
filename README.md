@@ -51,6 +51,7 @@ Keep the C# and the shader in sync on these names.
 - `orthographicSize = renderResolution.y * 0.5 / pixelsPerUnit`
 - `unitsPerPixel = 1 / pixelsPerUnit`
 - `renderResolution = screen / divisor` rounded up to even, **plus** `2 × EdgeMarginTexels` — the render texture carries the margin, the viewport samples the clean screen-ratio window inside it (`windowUV = 1 − 2 × margin / texels`, scaled by `1 / zoom`, offset by `_SubPixelOffset`).
+- `renderResolution` multiplies by `renderScale` (1, 2, 4) before the margin: the render texture is `renderScale` times the screen, so zoom 1 shows `1 / renderScale` game pixels per screen pixel. "1:1" is the point where the texture equals the screen; the overview mode renders 2× the screen and reads as 1:0.5. `SubpixelCameraBase.SetRenderScale` changes it at runtime; every seam (window, snap grid, offset, margin, picking) reads the texture size, so they all follow.
 - Target **64 pixels per unit**.
 
 ## Consuming from a game

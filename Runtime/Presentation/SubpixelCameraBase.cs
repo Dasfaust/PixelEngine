@@ -41,6 +41,14 @@ namespace PixelEngine.Presentation
         /// </summary>
         public const float EdgeMarginTexels = 2f;
 
+        // Runtime render scale, seeded from the config at Start and changed by
+        // SetRenderScale. The texture is scale x (screen / divisor) plus the edge
+        // margin, so scale 2 doubles the world the camera covers at the same zoom
+        // levels: one screen pixel per two game pixels at zoom 1. The window math,
+        // the snap grid, the subpixel offset conversion, the margin, and the
+        // picking seam all read the texture size, so they stay valid at any scale.
+        protected int renderScale = 1;
+
         /// <summary>
         /// The decoupling seam: companion components and game code subscribe to this instead
         /// of the camera referencing them. Invoked whenever the camera's stable reference
@@ -52,6 +60,47 @@ namespace PixelEngine.Presentation
         public void Start()
         {
             cam = GetComponent<Camera>();
+            renderScale = NormalizeRenderScale(cameraConfig != null ? cameraConfig.renderScale : 1);
+        }
+
+        /// <summary>
+        /// 1, 2, 4; anything else reads as 1.
+        /// </summary>
+        private static int NormalizeRenderScale(int scale)
+        {
+            if (scale <= 1) return 1;
+            if (scale <= 2) return 2;
+            return 4;
+        }
+
+        /// <summary>
+        /// The current render scale: the render texture is this many times the
+        /// screen size, so zoom 1 shows 1/screen scale game pixels per screen pixel.
+        /// </summary>
+        public int GetRenderScale()
+        {
+            return renderScale;
+        }
+
+        /// <summary>
+        /// Change the render scale at runtime (the overview camera mode calls this):
+        /// 1 = native, 2 = one screen pixel per two game pixels at zoom 1, 4 = a
+        /// quarter. The render texture, the camera coverage (the orthographic size
+        /// formula reads the grown texture), the subpixel offset conversion, the
+        /// edge margin, and the picking seam all follow in one UpdateResolution,
+        /// so no other seam needs to know the mode exists. The texture
+        /// reallocation is a one-time cost on the switch.
+        /// </summary>
+        public void SetRenderScale(int scale)
+        {
+            int normalized = NormalizeRenderScale(scale);
+            if (normalized == renderScale)
+            {
+                return;
+            }
+
+            renderScale = normalized;
+            UpdateResolution();
         }
 
         public float GetUVZoomLevel()
@@ -181,8 +230,8 @@ namespace PixelEngine.Presentation
             screenSize.x = Screen.width;
             screenSize.y = Screen.height;
             int2 divisor = GetResolutionDivisor();
-            renderResolution.x = screenSize.x / divisor.x;
-            renderResolution.y = screenSize.y / divisor.y;
+            renderResolution.x = screenSize.x / divisor.x * renderScale;
+            renderResolution.y = screenSize.y / divisor.y * renderScale;
 
             if (renderResolution.x % 2 != 0) renderResolution.x++;
             if (renderResolution.y % 2 != 0) renderResolution.y++;
