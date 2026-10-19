@@ -8,7 +8,9 @@ namespace PixelEngine.Tests
     /// Layout math for the pose-addressed atlas background. The atlas fixture is a
     /// 2048 x 288 grid: 8 yaw columns by 2 rows, origin bottom-left, so one cell
     /// measures 256 x 144 pixels and the cell aspect is 16:9, the bake aspect. A 16:9
-    /// view at zoom 1 must answer the whole cell.
+    /// view at zoom 1 must answer the whole cell. Pose is a float: fractional poses
+    /// slide the region, and Repeat wrap makes x unbounded (x and x+1 name the same
+    /// pixels).
     /// </summary>
     public class AtlasBackgroundLayoutTests
     {
@@ -19,7 +21,7 @@ namespace PixelEngine.Tests
         private const float CellH = 1f / 2f;
         private const float CellPixelAspect = 16f / 9f;
 
-        private static Rect CellRect(int pose, float zoom = 1f, float viewAspect = CellPixelAspect)
+        private static Rect CellRect(float pose, float zoom = 1f, float viewAspect = CellPixelAspect)
         {
             return AtlasBackgroundLayout.CellRect(pose, Columns, Rows, zoom, viewAspect, TextureAspect);
         }
@@ -43,6 +45,59 @@ namespace PixelEngine.Tests
             Assert.AreEqual(0f, r.xMin, 1e-6f, "nadir column");
             Assert.AreEqual(CellW, r.width, 1e-6f, "nadir width");
             Assert.AreEqual(CellH, r.height, 1e-6f, "nadir height");
+        }
+
+        [Test]
+        public void NadirBoundary_HalfStepsStayYawCell()
+        {
+            Rect justBelow = CellRect(7.999f);
+            Assert.AreEqual(0f, justBelow.yMin, 1e-6f, "7.999 keeps the yaw row");
+            Rect atNadir = CellRect(8f);
+            Assert.AreEqual(CellH, atNadir.yMin, 1e-6f, "8.0 reads the nadir row");
+        }
+
+        [Test]
+        public void FractionalPose_SlidesByCellWidth()
+        {
+            Rect half = CellRect(0.5f);
+            Rect whole = CellRect(1f);
+            Rect zero = CellRect(0f);
+            // A half-step pose sits exactly between the cell-0 center and the
+            // cell-1 center: the slide moves the region by pose × cell width.
+            Assert.AreEqual(zero.center.x + 0.5f * CellW, half.center.x, 1e-6f, "half-step center");
+            Assert.AreEqual(zero.center.x + CellW, whole.center.x, 1e-6f, "full-step center");
+            Assert.AreEqual(zero.height, half.height, 1e-6f, "slide does not resize");
+        }
+
+        [Test]
+        public void NegativePose_WrapsToTheSamePixels()
+        {
+            // Repeat wrap: x and x+1 name the same pixels, so a pose below 0 and
+            // the pose one full strip cycle above it must answer rects one texture
+            // width apart.
+            Rect below = CellRect(-0.5f);
+            Rect cyclic = CellRect(7.5f);
+            Assert.AreEqual(1f, cyclic.center.x - below.center.x, 1e-6f, "one strip cycle apart");
+            Assert.Less(below.center.x, 0.01f, "the answered x runs below 0 and the wrap carries it");
+        }
+
+        [Test]
+        public void ContinuousPoses_StayInsideTheRowBand_AndTheCellSize()
+        {
+            foreach (float pose in new[] { -0.25f, 0.5f, 3.75f, 7.999f })
+            {
+                foreach (float zoom in new[] { 1f, 2f, 4f })
+                {
+                    foreach (float aspect in new[] { 1f, CellPixelAspect, 3f })
+                    {
+                        Rect r = CellRect(pose, zoom, aspect);
+                        Assert.GreaterOrEqual(r.yMin, -1e-6f, $"yMin pose {pose}");
+                        Assert.LessOrEqual(r.yMax, CellH + 1e-6f, $"yMax pose {pose}");
+                        Assert.LessOrEqual(r.width, CellW + 1e-6f, $"width pose {pose} zoom {zoom}");
+                        Assert.LessOrEqual(r.height, CellH + 1e-6f, $"height pose {pose} zoom {zoom}");
+                    }
+                }
+            }
         }
 
         [Test]
@@ -99,7 +154,7 @@ namespace PixelEngine.Tests
         }
 
         [Test]
-        public void Region_StaysInsideTheCell()
+        public void IntegerRegions_StayInsideTheirCell()
         {
             foreach (int pose in new[] { 0, 4, 7, Columns })
             {
@@ -108,10 +163,12 @@ namespace PixelEngine.Tests
                     foreach (float aspect in new[] { 1f, CellPixelAspect, 3f })
                     {
                         Rect r = CellRect(pose, zoom, aspect);
-                        Assert.GreaterOrEqual(r.xMin, -1e-6f, $"xMin pose {pose} zoom {zoom}");
-                        Assert.GreaterOrEqual(r.yMin, -1e-6f, $"yMin pose {pose} zoom {zoom}");
-                        Assert.LessOrEqual(r.xMax, 1f + 1e-6f, $"xMax pose {pose} zoom {zoom}");
-                        Assert.LessOrEqual(r.yMax, 1f + 1e-6f, $"yMax pose {pose} zoom {zoom}");
+                        float cellX = pose == Columns ? 0f : pose * CellW;
+                        float rowY = pose == Columns ? CellH : 0f;
+                        Assert.GreaterOrEqual(r.xMin, cellX - 1e-6f, $"xMin pose {pose} zoom {zoom}");
+                        Assert.LessOrEqual(r.xMax, cellX + CellW + 1e-6f, $"xMax pose {pose} zoom {zoom}");
+                        Assert.GreaterOrEqual(r.yMin, rowY - 1e-6f, $"yMin pose {pose} zoom {zoom}");
+                        Assert.LessOrEqual(r.yMax, rowY + CellH + 1e-6f, $"yMax pose {pose} zoom {zoom}");
                     }
                 }
             }
