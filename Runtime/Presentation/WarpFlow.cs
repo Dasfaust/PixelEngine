@@ -145,18 +145,21 @@ namespace PixelEngine.Presentation
     ///
     /// Render path: the rig blits the clone into the warp texture each late
     /// update, clears the texture first so each frame answers only its own
-    /// vanishing point, and hands the texture to the RawImage, which the
-    /// canvas draws with the UI default material. The blit pass stores the
-    /// streak color and its alpha unmultiplied — measured in play mode: a
-    /// quarter-band pixel carries (6, 177, 187) at alpha 64, the authored
-    /// cyan whole — so the canvas alpha blend lands an authored band alpha
-    /// as authored, one multiplication. The warp pixels are the warp
-    /// texture's pixels — whole, uniform, upscale-stable — so the layer
-    /// shares the world's low-resolution pixel look and answers no
-    /// screen-resolution grid. The grid cell the shader quantizes to is the
-    /// warp texture's cell, derived here, and the material's pixel scale
-    /// multiplies it. The texture is Point-filtered so the canvas blit
-    /// stays crisp.
+    /// vanishing point, and hands the texture to the RawImage. The canvas
+    /// draws that RawImage with a blit material authored on
+    /// PixelEngineSubpixelViewport — edge margin 0, zoom 1, alpha blend —
+    /// so the layer samples through the same bilinear point sampling the
+    /// viewport blit rides: UVs snap to warp-texture texel centers, a
+    /// magnified texel lands crisp whole, and a minified texel blends
+    /// through the smoothstep. The blit pass stores the streak color and
+    /// its alpha unmultiplied — measured in play mode: a quarter-band
+    /// pixel carries (6, 177, 187) at alpha 64, the authored cyan whole —
+    /// so the canvas alpha blend lands an authored band alpha as authored,
+    /// one multiplication. The warp pixels are the warp texture's pixels —
+    /// whole, uniform, upscale-stable — so the layer shares the world's
+    /// low-resolution pixel look and answers no screen-resolution grid.
+    /// The grid cell the shader quantizes to is the warp texture's cell,
+    /// derived here, and the material's pixel scale multiplies it.
     /// </summary>
     public class WarpFlow : MonoBehaviour
     {
@@ -241,10 +244,16 @@ namespace PixelEngine.Presentation
         private RenderTexture CreateWarpTexture()
         {
             var size = WarpFlowMath.WarpResolution(Screen.width, Screen.height, renderScale);
+            // Bilinear filtering, paired with the canvas blit material's
+            // bilinear point sampling: the material snaps its UV to texel
+            // centers, so a magnified texel lands crisp whole, and a
+            // minified texel — a UI scale below 1 — blends through the
+            // smoothstep instead of aliasing. The pairing is the same one
+            // the viewport blit rides.
             var texture = new RenderTexture(size.x, size.y, 0, RenderTextureFormat.ARGB32)
             {
                 name = "WarpFlow Texture",
-                filterMode = FilterMode.Point
+                filterMode = FilterMode.Bilinear
             };
             texture.Create();
             return texture;
