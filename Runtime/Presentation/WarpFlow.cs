@@ -97,10 +97,16 @@ namespace PixelEngine.Presentation
         /// <summary>The streak count per ray that holds the authored per-UV
         /// spacing across the path: count = perUv x path, so a longer path
         /// carries proportionally more streaks and the on-screen wavelength
-        /// stays 1 / perUv at every pose.</summary>
+        /// stays 1 / perUv at every pose. The answer is a whole number: the
+        /// cycle wrap drops the head by one path, which is the count in
+        /// wavelength units, and the streak pattern — a frac over the
+        /// coordinate — is continuous across the wrap only when that drop is
+        /// whole. A fractional count leaves the fraction as a remainder, and
+        /// the pattern kicks by that fraction of a wavelength at every wrap,
+        /// once per cycle.</summary>
         public static float StreakCount(float streaksPerUv, float path)
         {
-            return math.max(streaksPerUv * math.max(path, 0.01f), 1f);
+            return math.max(math.round(streaksPerUv * math.max(path, 0.01f)), 1f);
         }
     }
 

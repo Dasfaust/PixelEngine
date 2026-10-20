@@ -1,5 +1,6 @@
 using NUnit.Framework;
 using Unity.Mathematics;
+using UnityEngine;
 using PixelEngine.Presentation;
 
 namespace PixelEngine.Tests
@@ -12,7 +13,8 @@ namespace PixelEngine.Tests
     /// across 90 degrees, the ray count holds the authored density as the
     /// point moves, the ray path covers every screen corner plus the margin
     /// as the point moves off screen, the streak count holds the on-screen
-    /// spacing across paths, and a perpendicular gaze answers the tie
+    /// spacing across paths and stays whole so the cycle wrap is seamless,
+    /// and a perpendicular gaze answers the tie
     /// deterministically.
     /// </summary>
     public class WarpFlowMathTests
@@ -199,18 +201,62 @@ namespace PixelEngine.Tests
             }
         }
 
-        [Test]
-        public void StreakCount_HoldsOnScreenSpacing_AcrossPaths()
+        private static float Frac(float x)
         {
+            return x - Mathf.Floor(x);
+        }
+
+        [Test]
+        public void StreakCount_CycleWrapDropIsWhole_TheSeamlessCondition()
+        {
+            // The cycle wrap drops the head by one path, and one path is the
+            // count in wavelength units, so the streak coordinate drops by the
+            // count. The pattern reads a frac over the coordinate, so the wrap
+            // is seamless only when that drop is whole: frac(u - drop) must
+            // answer u at every point of the streak. The reported fault - flow
+            // for a few seconds, a kick backwards, repeating each cycle - is a
+            // fractional count leaving the fraction as the remainder at each
+            // wrap. This test states the condition the rig must answer at the
+            // pose-table points.
+            float margin = 0.15f;
+            foreach (float2 vp in new[]
+            {
+                new float2(0.5f, 0.6732f),      // yaw 0
+                new float2(-1.5f, 0.5f),        // yaw 90 side view
+                new float2(-0.9142f, -0.9142f)  // nadir yaw combo
+            })
+            {
+                float path = WarpFlowMath.RayPath(vp, margin);
+                float density = WarpFlowMath.StreakCount(10f, path);
+                Assert.AreEqual(0f, density - Mathf.Round(density), 0f, $"the wrap drop for {vp} is whole");
+                foreach (float u in new[] { 0f, 0.13f, 0.5f, 0.87f })
+                {
+                    Assert.AreEqual(u, Frac(u - density), 1e-3f,
+                        $"frac across the wrap drop for {vp} at u={u}");
+                }
+            }
+        }
+
+        [Test]
+        public void StreakCount_HoldsOnScreenSpacing_AcrossPaths()        {
             // The on-screen wavelength is path / count = 1 / perUv at every
             // pose, so a longer path carries proportionally more streaks and
-            // the spacing a reader sees never moves with the pose.
+            // the spacing a reader sees never moves with the pose. The count
+            // is whole, so the spacing carries the rounding residue: at most
+            // half a wavelength in the count's terms.
             float perUv = 10f;
+            foreach (float path in new[] { 0.9f, 0.95f, 1f, 2.7f })
+            {
+                float count = WarpFlowMath.StreakCount(perUv, path);
+                Assert.AreEqual(count, Mathf.Round(count), 0f, $"count for path {path} is whole");
+                Assert.GreaterOrEqual(count, 1f, $"count for path {path} carries a streak");
+                Assert.GreaterOrEqual(0.9f / path, path / count - 1f / perUv, $"spacing keeps pace at path {path}");
+                Assert.GreaterOrEqual(1.1f / path, 1f / perUv - path / count, $"spacing keeps pace at path {path}");
+            }
+
             float nearCount = WarpFlowMath.StreakCount(perUv, 0.9f);
             float farCount = WarpFlowMath.StreakCount(perUv, 2.7f);
-            Assert.AreEqual(1f / perUv, 0.9f / nearCount, 1e-4f, "near spacing");
-            Assert.AreEqual(1f / perUv, 2.7f / farCount, 1e-4f, "far spacing");
-            Assert.AreEqual(0.9f / 2.7f, nearCount / farCount, 1e-4f, "count scales with the path");
+            Assert.AreEqual(0.9f / 2.7f, nearCount / farCount, 0.1f, "count scales with the path");
 
             Assert.GreaterOrEqual(WarpFlowMath.StreakCount(perUv, 0.01f), 1f, "a tiny path still carries a streak");
         }
