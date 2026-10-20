@@ -144,17 +144,25 @@ namespace PixelEngine.Presentation
     /// north" is the caller's, not this component's.
     ///
     /// Render path: the rig blits the clone into the warp texture each late
-    /// update and hands the texture to the RawImage, which the canvas draws
-    /// with the built-in UI material. The warp pixels are the warp texture's
-    /// pixels — whole, uniform, upscale-stable — so the layer shares the
-    /// world's low-resolution pixel look and answers no screen-resolution
-    /// grid. The grid cell the shader quantizes to is the warp texture's
-    /// cell, derived here, and the material's pixel scale multiplies it. The
-    /// texture is Point-filtered so the canvas blit stays crisp.
+    /// update, clears the texture first so each frame answers only its own
+    /// vanishing point, and hands the texture to the RawImage, which the
+    /// canvas draws with the UI default material. The blit pass stores the
+    /// streak color and its alpha unmultiplied — measured in play mode: a
+    /// quarter-band pixel carries (6, 177, 187) at alpha 64, the authored
+    /// cyan whole — so the canvas alpha blend lands an authored band alpha
+    /// as authored, one multiplication. The warp pixels are the warp
+    /// texture's pixels — whole, uniform, upscale-stable — so the layer
+    /// shares the world's low-resolution pixel look and answers no
+    /// screen-resolution grid. The grid cell the shader quantizes to is the
+    /// warp texture's cell, derived here, and the material's pixel scale
+    /// multiplies it. The texture is Point-filtered so the canvas blit
+    /// stays crisp.
     /// </summary>
     public class WarpFlow : MonoBehaviour
     {
         [SerializeField] private RawImage outputImage;
+        [Tooltip("Authored warp material: the look source the rig clones for its per-frame writes. The RawImage's own material is the canvas blit material, not this one.")]
+        [SerializeField] private Material warpMaterial;
         [Tooltip("Warp texture scale: 2 renders at half screen resolution and the canvas upscales. 1 renders at screen resolution.")]
         [SerializeField, Range(1, 4)] private int renderScale = 2;
         [Tooltip("Authored focal length: the cone strength. The vanishing point sits focal x tan(gaze-travel angle) off center.")]
@@ -174,13 +182,12 @@ namespace PixelEngine.Presentation
 
         private void Awake()
         {
-            if (outputImage != null && outputImage.material != null)
+            if (outputImage != null && warpMaterial != null)
             {
-                runtimeMaterial = new Material(outputImage.material);
-                // The canvas draws the warp texture with the built-in UI
-                // material; the warp shader rides the blit into the texture,
-                // not the canvas pass.
-                outputImage.material = null;
+                runtimeMaterial = new Material(warpMaterial);
+                // The canvas draws the RawImage with the UI default
+                // material, which takes the warp texture straight; the warp
+                // shader rides only the blit into the texture.
                 warpTexture = CreateWarpTexture();
                 outputImage.texture = warpTexture;
             }
@@ -217,12 +224,16 @@ namespace PixelEngine.Presentation
                 outputImage.texture = warpTexture;
             }
 
-            // Clear before the blit: a blit from no source leaves the texture
-            // to the material's writes, and the cleared floor keeps the
-            // transparent floor deterministic frame to frame.
+            // Clear the color before the blit. The streak pass alpha-blends
+            // onto the texture, and an alpha-blended source leaves the
+            // destination's standing alpha where its own alpha is 0 — so a
+            // texture that is not cleared carries every past frame's streak
+            // trails, and a camera rotation smears them across the frame.
+            // The cleared floor makes each frame answer only this frame's
+            // vanishing point.
             var previous = RenderTexture.active;
             RenderTexture.active = warpTexture;
-            GL.Clear(true, false, Color.clear);
+            GL.Clear(true, true, Color.clear);
             Graphics.Blit((Texture)null, warpTexture, runtimeMaterial);
             RenderTexture.active = previous;
         }
