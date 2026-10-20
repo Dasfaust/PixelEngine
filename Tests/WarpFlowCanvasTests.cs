@@ -8,9 +8,11 @@ using PixelEngine.Presentation;
 namespace PixelEngine.Tests
 {
     /// <summary>
-    /// The CameraCanvas composite wiring: the rig builds a Screen Space -
-    /// Camera canvas carrying the authored RawImage, at the authored plane
-    /// distance, on the layer the camera culls, and the warp texture is half
+    /// The CameraCanvas composite wiring: the rig builds a World Space canvas
+    /// carrying the authored RawImage, keeps it dark until the composite
+    /// camera is named, rides it at the authored distance in front of that
+    /// camera, scales it so one canvas pixel is one viewport pixel, and
+    /// renders it on a layer the camera culls. The warp texture is half
     /// precision so a band at the HDR gain crosses the bloom threshold of 1.
     /// The fixture drives the rig through Initialize — AddComponent runs Awake
     /// while every serialized field is still default, so the scene-placed
@@ -25,12 +27,16 @@ namespace PixelEngine.Tests
         private GameObject imageGo;
         private WarpFlow rig;
         private Material sourceMaterial;
+        private Camera camera;
 
         [SetUp]
         public void SetUp()
         {
             cameraGo = new GameObject("WarpCanvas Test Camera");
-            cameraGo.AddComponent<Camera>();
+            camera = cameraGo.AddComponent<Camera>();
+            camera.orthographic = true;
+            camera.orthographicSize = 5f;
+            camera.pixelRect = new Rect(0f, 0f, 800f, 600f);
             imageGo = new GameObject("WarpCanvas Test Image");
             var image = imageGo.AddComponent<RawImage>();
             sourceMaterial = new Material(Shader.Find("PixelEngine/Warp Flow"));
@@ -71,15 +77,16 @@ namespace PixelEngine.Tests
         }
 
         [Test]
-        public void CameraCanvas_Initialize_BuildsScreenSpaceCameraCanvasCarryingTheImage()
+        public void CameraCanvas_Initialize_BuildsWorldSpaceCanvasCarryingTheImage()
         {
             rig.Initialize();
 
             var canvas = GetField<Canvas>("flowCanvas");
             Assert.IsNotNull(canvas, "the camera composite builds its canvas in Initialize");
-            Assert.AreEqual(RenderMode.ScreenSpaceCamera, canvas.renderMode);
-            Assert.IsNull(canvas.transform.parent,
-                "a canvas nested under the scene overlay canvas inherits the overlay's mode — the composite canvas is a root object");
+            Assert.AreEqual(RenderMode.WorldSpace, canvas.renderMode,
+                "Screen Space - Camera lands after the post stack in URP; the composite must ride transparent geometry");
+            Assert.IsFalse(canvas.gameObject.activeSelf,
+                "an unparented canvas is loose in the world — it stands dark until the camera is named");
             Assert.AreEqual(canvas.transform, imageGo.transform.parent,
                 "the canvas carries the RawImage the scene authored");
             Assert.IsInstanceOf<RenderTexture>(imageGo.GetComponent<RawImage>().texture,
@@ -87,30 +94,53 @@ namespace PixelEngine.Tests
         }
 
         [Test]
-        public void CameraCanvas_Initialize_PlacesThePlaneAtTheAuthoredDistance()
+        public void CameraCanvas_SetFlowWithCamera_RidesTheCompositeCameraAtTheAuthoredPlane()
         {
-            SetField("planeDistance", 250f);
             rig.Initialize();
+            rig.SetFlow(new float3(0f, 0f, 1f), 0.5f, camera);
+            rig.SyncCameraCanvas();
 
             var canvas = GetField<Canvas>("flowCanvas");
             Assert.IsNotNull(canvas);
-            Assert.AreEqual(250f, canvas.planeDistance,
+            Assert.IsTrue(canvas.gameObject.activeSelf, "naming the camera switches the canvas on");
+            Assert.AreEqual(cameraGo.transform, canvas.transform.parent,
+                "parenting to the camera anchors the plane to the view");
+            Assert.AreEqual(400f, canvas.transform.localPosition.z,
+                "the plane sits at the authored distance in front of the camera — the camera gazes along local +Z");
+        }
+
+        [Test]
+        public void CameraCanvas_PlaneDistanceIsTheAuthoredPlane()
+        {
+            SetField("planeDistance", 250f);
+            rig.Initialize();
+            rig.SetFlow(new float3(0f, 0f, 1f), 0.5f, camera);
+            rig.SyncCameraCanvas();
+
+            var canvas = GetField<Canvas>("flowCanvas");
+            Assert.IsNotNull(canvas);
+            Assert.AreEqual(250f, canvas.transform.localPosition.z,
                 "the plane distance is authored, and it is the occlusion rule");
         }
 
         [Test]
-        public void CameraCanvas_SetFlowWithCamera_NamesTheCompositeCamera()
+        public void SyncCameraCanvas_MapsOneCanvasPixelToOneViewportPixel()
         {
             rig.Initialize();
+            rig.SetFlow(new float3(0f, 0f, 1f), 0.5f, camera);
+            rig.SyncCameraCanvas();
+
             var canvas = GetField<Canvas>("flowCanvas");
             Assert.IsNotNull(canvas);
-            Assert.AreEqual(RenderMode.ScreenSpaceCamera, canvas.renderMode,
-                "the mode stands when a world camera is named with it — the fallback to Overlay is the fault");
-
-            rig.SetFlow(new float3(0f, 0f, 1f), 0.5f, cameraGo.GetComponent<Camera>());
-
-            Assert.AreEqual(cameraGo.GetComponent<Camera>(), canvas.worldCamera,
-                "the canvas draws through the camera the caller names");
+            var rect = canvas.GetComponent<RectTransform>();
+            Assert.AreEqual(800f, rect.sizeDelta.x, 0.01f);
+            Assert.AreEqual(600f, rect.sizeDelta.y, 0.01f);
+            // The frustum section at the plane is 2 x orthographicSize tall;
+            // spread over the viewport height, one canvas pixel is one
+            // viewport pixel. The test camera's parent scale is 1.
+            float expected = 2f * 5f / 600f;
+            Assert.AreEqual(expected, canvas.transform.localScale.x, 0.0001f);
+            Assert.AreEqual(expected, canvas.transform.localScale.y, 0.0001f);
         }
 
         [Test]
@@ -133,9 +163,8 @@ namespace PixelEngine.Tests
             Assert.IsNotNull(canvas);
             var layer = canvas.gameObject.layer;
             Assert.AreEqual(LayerMask.NameToLayer("UI"), layer);
-            var mask = cameraGo.GetComponent<Camera>().cullingMask;
-            Assert.That(mask & (1 << layer), Is.Not.EqualTo(0),
-                "a canvas outside the camera's culling mask draws nothing, with no log");
+            Assert.That(camera.cullingMask & (1 << layer), Is.Not.EqualTo(0),
+                "a World Space canvas outside the camera's culling mask draws nothing, with no log");
         }
 
         [Test]

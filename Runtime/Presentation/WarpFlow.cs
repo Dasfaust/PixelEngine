@@ -163,14 +163,18 @@ namespace PixelEngine.Presentation
     ///
     /// Composite modes: ViewportCanvas draws the RawImage on the scene's
     /// overlay canvas, after the camera's post stack, where color clamps at
-    /// 1. CameraCanvas reparents the same RawImage onto a Screen Space -
-    /// Camera canvas at an authored plane distance, so the camera draws the
-    /// layer inside its own render texture, in the transparent pass, before
-    /// the post stack: bloom and tonemapping reach the streaks, and geometry
-    /// nearer the camera than the plane covers them by the transparent depth
-    /// test. The warp texture carries half precision in both modes so band
-    /// values above 1.0 stand at the post stack; the overlay path clamps
-    /// them at composite, as before.
+    /// 1. CameraCanvas reparents the same RawImage onto a World Space canvas
+    /// parented to the composite camera at the authored distance, scaled so
+    /// one canvas pixel is one viewport pixel. The camera draws it as
+    /// ordinary transparent geometry inside its render texture, in the
+    /// transparent pass, before the post stack: bloom and tonemapping reach
+    /// the streaks, and geometry nearer the camera than the plane covers
+    /// them by the transparent depth test. Screen Space - Camera does not
+    /// qualify: URP draws that canvas mode after the post stack, so the
+    /// layer lands in the texture with no bloom and no tone — measured on
+    /// the play-mode probes. The warp texture carries half precision in both
+    /// modes so band values above 1.0 stand at the post stack; the overlay
+    /// path clamps them at composite, as before.
     /// </summary>
     public class WarpFlow : MonoBehaviour
     {
@@ -180,7 +184,7 @@ namespace PixelEngine.Presentation
         [Tooltip("Warp texture scale: 2 renders at half screen resolution and the canvas upscales. 1 renders at screen resolution.")]
         [SerializeField, Range(1, 4)] private int renderScale = 2;
         public enum WarpComposite { ViewportCanvas = 0, CameraCanvas = 1 }
-        [Tooltip("Where the layer composites. ViewportCanvas: the scene's overlay canvas, after the camera's post stack. CameraCanvas: a Screen Space - Camera canvas inside the camera's render, before the post stack.")]
+        [Tooltip("Where the layer composites. ViewportCanvas: the scene's overlay canvas, after the camera's post stack. CameraCanvas: a World Space canvas riding in front of the composite camera, inside the camera's render, before the post stack.")]
         [SerializeField] private WarpComposite composite = WarpComposite.ViewportCanvas;
         [Tooltip("CameraCanvas mode: how far in front of the camera the canvas plane sits. Geometry nearer than the plane covers the streaks; the cleared sky shows them.")]
         [SerializeField, Min(1f)] private float planeDistance = 400f;
@@ -198,6 +202,7 @@ namespace PixelEngine.Presentation
         private Material runtimeMaterial;
         private RenderTexture warpTexture;
         private Canvas flowCanvas;
+        private Camera compositeCamera;
         private bool missingReported;
 
         private void Awake()
@@ -240,22 +245,20 @@ namespace PixelEngine.Presentation
             {
                 return;
             }
-            // The canvas node is a root object. Under this component's node
-            // it would sit inside the scene's overlay canvas — a nested
-            // canvas inherits its root's mode, and a root canvas is what
-            // Screen Space - Camera needs. The image's node joins this node
-            // as its child, so the reparent runs one way: the canvas is
-            // never a descendant of the image.
+            // A World Space canvas. URP renders Screen Space - Camera canvases
+            // after the post stack, so the streak pixels land in the render
+            // texture after bloom and tonemapping already ran — measured: the
+            // layer reads in the texture and fires no bloom. A World Space
+            // canvas is ordinary transparent geometry: it composites inside
+            // the post stack, and the camera culls it by layer. The node
+            // starts inactive; SetFlow with a named camera parents it and
+            // switches it on, so an unparented canvas is never loose in the
+            // world.
             var go = new GameObject("WarpFlowCanvas");
             go.layer = LayerMask.NameToLayer("UI");
             flowCanvas = go.AddComponent<Canvas>();
-            // The mode falls back to Screen Space - Overlay when the canvas
-            // has no world camera at the moment the mode is set, so the
-            // camera is named first. Camera.main is the scene's pixel camera
-            // at Awake; SetFlow re-names the caller's camera every frame.
-            flowCanvas.worldCamera = Camera.main;
-            flowCanvas.renderMode = RenderMode.ScreenSpaceCamera;
-            flowCanvas.planeDistance = planeDistance;
+            flowCanvas.renderMode = RenderMode.WorldSpace;
+            go.SetActive(false);
             // The RawImage carries its authored stretched rect and its
             // authored blit material across the reparent, so the camera
             // canvas draws the same image the overlay canvas drew.
@@ -322,6 +325,10 @@ namespace PixelEngine.Presentation
             GL.Clear(true, true, Color.clear);
             Graphics.Blit((Texture)null, warpTexture, runtimeMaterial);
             RenderTexture.active = previous;
+
+            // The canvas plane follows the camera every frame: the frustum
+            // section, the authored distance, the viewport size.
+            SyncCameraCanvas();
         }
 
         private RenderTexture CreateWarpTexture()
@@ -359,12 +366,12 @@ namespace PixelEngine.Presentation
                 }
                 return;
             }
-            if (composite == WarpComposite.CameraCanvas && flowCanvas != null && flowCanvas.worldCamera == null)
+            if (composite == WarpComposite.CameraCanvas && flowCanvas != null && compositeCamera == null)
             {
                 if (!missingReported)
                 {
                     missingReported = true;
-                    Debug.LogError("WarpFlow: the camera canvas has no world camera named, so the layer draws nothing.", this);
+                    Debug.LogError("WarpFlow: the camera canvas has no camera named, so the layer draws nothing.", this);
                 }
                 return;
             }
@@ -392,17 +399,49 @@ namespace PixelEngine.Presentation
         }
 
         /// <summary>Flow with the composite camera named. CameraCanvas mode
-        /// draws its canvas through this camera, inside the camera's own
-        /// render and before the camera's post stack. ViewportCanvas mode
-        /// composites on the overlay canvas and ignores the argument.</summary>
+        /// parents its World Space canvas to this camera the first time the
+        /// camera is named, so the plane rides the view, and switches the
+        /// canvas on. ViewportCanvas mode composites on the overlay canvas
+        /// and ignores the argument.</summary>
         public void SetFlow(float3 viewTravelDir, float intensity, Camera targetCamera)
         {
             if (composite == WarpComposite.CameraCanvas && flowCanvas != null
-                && targetCamera != null && flowCanvas.worldCamera != targetCamera)
+                && targetCamera != null && compositeCamera != targetCamera)
             {
-                flowCanvas.worldCamera = targetCamera;
+                compositeCamera = targetCamera;
+                flowCanvas.transform.SetParent(targetCamera.transform, false);
+                flowCanvas.gameObject.SetActive(true);
             }
             SetFlow(viewTravelDir, intensity);
+        }
+
+        /// <summary>Places the canvas plane in front of the composite camera
+        /// and scales it so one canvas pixel is one viewport pixel: the
+        /// footprint is the frustum section at the plane, and the plane sits
+        /// at the authored distance behind gameplay geometry, which occludes
+        /// it by the transparent depth test. LateUpdate calls this every
+        /// frame, so a viewport resize and a camera move both answer; a test
+        /// calls it after it names the camera.</summary>
+        public void SyncCameraCanvas()
+        {
+            if (composite != WarpComposite.CameraCanvas || flowCanvas == null || compositeCamera == null)
+            {
+                return;
+            }
+            var rect = flowCanvas.GetComponent<RectTransform>();
+            var pr = compositeCamera.pixelRect;
+            var height = Mathf.Max(pr.height, 1f);
+            rect.sizeDelta = new Vector2(Mathf.Max(pr.width, 1f), height);
+            flowCanvas.transform.localPosition = new Vector3(0f, 0f, planeDistance);
+            // The parent's world scale scales the canvas footprint with it,
+            // so the canvas scale divides it out: the footprint lands at the
+            // frustum section at the plane.
+            var parentScale = compositeCamera.transform.lossyScale;
+            var world = 2f * compositeCamera.orthographicSize / height;
+            flowCanvas.transform.localScale = new Vector3(
+                world / Mathf.Max(parentScale.x, 0.0001f),
+                world / Mathf.Max(parentScale.y, 0.0001f),
+                1f);
         }
     }
 }
