@@ -181,5 +181,53 @@ namespace PixelEngine.Tests
             Assert.AreEqual(CellW, r.width, 1e-6f, "width");
             Assert.AreEqual(CellH, r.height, 1e-6f, "height");
         }
+
+        [Test]
+        public void QuantizedPose_SitsOnTheStepGrid()
+        {
+            // 5 steps cover a cell: every answered pose is a multiple of 1/5 cell.
+            foreach (float pose in new[] { 0.31f, 0.58f, 7.44f, -1.2f, 12.9f })
+            {
+                float q = AtlasBackgroundLayout.QuantizedPose(pose, 5);
+                float whole = q * 5f;
+                Assert.AreEqual(Mathf.RoundToInt(whole), whole, 1e-5f, $"pose {pose} off the grid");
+            }
+        }
+
+        [Test]
+        public void QuantizedPose_LeavesIntegerPosesWhole()
+        {
+            foreach (int pose in new[] { 0, 3, 7, 8, 12, -1 })
+            {
+                Assert.AreEqual(pose, AtlasBackgroundLayout.QuantizedPose(pose, 5), 1e-6f, $"pose {pose}");
+            }
+        }
+
+        [Test]
+        public void QuantizedPose_RoundsToTheNearestStep()
+        {
+            Assert.AreEqual(0.4f, AtlasBackgroundLayout.QuantizedPose(0.31f, 5), 1e-6f, "up to 2/5");
+            Assert.AreEqual(0.4f, AtlasBackgroundLayout.QuantizedPose(0.49f, 5), 1e-6f, "nearest is 2/5");
+            Assert.AreEqual(-1f, AtlasBackgroundLayout.QuantizedPose(-1.05f, 5), 1e-6f, "negative rounds on the grid");
+        }
+
+        [Test]
+        public void QuantizedPose_OneStepPerCellAtOneStepPerCell()
+        {
+            // N = 1 answers whole cells only: a slide in flight answers the nearest cell.
+            Assert.AreEqual(1f, AtlasBackgroundLayout.QuantizedPose(0.6f, 1), 1e-6f, "past the halfway mark");
+            Assert.AreEqual(0f, AtlasBackgroundLayout.QuantizedPose(0.4f, 1), 1e-6f, "before it");
+        }
+
+        [Test]
+        public void QuantizedPose_StepsLandOnTheWrapTargetWhole()
+        {
+            // The 7-to-0 wrap rides the unbounded axis: target 8. The step grid
+            // reaches 8 exactly, so the answered cell reads as column 0.
+            float q = AtlasBackgroundLayout.QuantizedPose(7.96f, 5);
+            Assert.AreEqual(8f, q, 1e-6f, "wrap target");
+            Rect r = CellRect(q);
+            Assert.AreEqual(0f, r.xMin, 1e-6f, "answered column after the wrap");
+        }
     }
 }

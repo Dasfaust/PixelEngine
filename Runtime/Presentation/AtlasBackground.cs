@@ -51,6 +51,20 @@ namespace PixelEngine.Presentation
 
             return new Rect(centerX - w * 0.5f, centerY - h * 0.5f, w, h);
         }
+
+        /// <summary>
+        /// Quantize a pose to whole slide steps: <c>stepsPerCell</c> steps cover one
+        /// cell, so each answered move is <c>1 / stepsPerCell</c> of a cell. A step
+        /// is a whole background pixel when the step count divides the cell width in
+        /// pixels evenly, which is the rotation-duration rule the plan authors as N.
+        /// The quantization is the snap: answered poses sit on the step grid, so the
+        /// slide lands one whole step per crossed threshold and stands between them.
+        /// </summary>
+        public static float QuantizedPose(float pose, int stepsPerCell)
+        {
+            float steps = math.max(stepsPerCell, 1);
+            return math.round(pose * steps) / steps;
+        }
     }
 
     /// <summary>
@@ -66,6 +80,19 @@ namespace PixelEngine.Presentation
     /// rotation does. The game layer owns the pose model; this component takes a pose
     /// value, a grid shape, and an atlas texture, and no game concept crosses the seam.
     ///
+    /// Sampling modes (BG3, behind the shipped toggle):
+    /// - BilinearPointSampling answers the slide continuously, and the sampling
+    ///   material (PixelEngine/Atlas UI Sample with _TEXEL_BLEND) snaps UVs to texel
+    ///   centers when a texel covers at least one pixel, and blends when a texel
+    ///   minifies below one.
+    /// - QuantizedSnap quantizes the answered pose to whole slide steps
+    ///   (<see cref="AtlasBackgroundLayout.QuantizedPose"/>, N steps per cell), and
+    ///   the sampling material (the same shader, keyword off) hard-snaps to texel
+    ///   centers. The step grid holds the slide between crossings, so the slide
+    ///   moves in whole background pixels when N divides the cell width in pixels.
+    /// A mode whose material is empty answers with the default UI material, which
+    /// samples the atlas at the texture's own filter mode.
+    ///
     /// Nadir fade: an optional second RawImage answers the nadir cell at a
     /// caller-named alpha, so a pitch move cross-fades the yaw view into the top-down
     /// view with no rotation and no slide. The base layer keeps answering the yaw pose
@@ -77,14 +104,24 @@ namespace PixelEngine.Presentation
     /// travel above zoom 1, so zoom 1 shows the cell whole.
     ///
     /// Texture rules (importer-side, not enforced here): the atlas needs
-    /// <c>filterMode = Point</c> for crisp texels, <c>mipMaps = off</c>, and
-    /// <c>wrapMode = Repeat</c> for the slide rule that the yaw strip wraps through
-    /// the atlas edge. The component clears each RawImage's custom material so the
-    /// default UI material samples the atlas with uvRect addressing.
+    /// <c>mipMaps = off</c> and <c>wrapMode = Repeat</c> for the slide rule that the
+    /// yaw strip wraps through the atlas edge. The bilinear sampling path needs
+    /// <c>filterMode = Bilinear</c>, which its snapping converts into point sampling
+    /// at texel scale; a Point-filtered atlas keeps the default-material answer crisp
+    /// and leaves the sub-texel blend path flat.
     /// </summary>
     [ExecuteAlways]
     public class AtlasBackground : MonoBehaviour
     {
+        /// <summary>The BG3 sampling modes, behind the shipped toggle.</summary>
+        public enum AtlasSamplingMode
+        {
+            /// <summary>Continuous slide, sampled through the bilinear point sampling material.</summary>
+            BilinearPointSampling,
+            /// <summary>Slide quantized to whole slide steps, sampled with the hard texel snap.</summary>
+            QuantizedSnap
+        }
+
         [SerializeField] private SubpixelCameraBase parentCamera;
         [SerializeField] private CameraConfig cameraConfig;
         [SerializeField] private RawImage outputImage;
@@ -95,10 +132,18 @@ namespace PixelEngine.Presentation
         [SerializeField] private int columns = 8;
         [Tooltip("Cell rows in the atlas grid. Two rows: yaw cells in row 0, the nadir image in row 1.")]
         [SerializeField] private int rows = 2;
+        [SerializeField] private AtlasSamplingMode samplingMode = AtlasSamplingMode.BilinearPointSampling;
+        [Tooltip("Mode B only: slide steps per cell, the rotation duration N. A step is a whole background pixel when N divides the cell width in pixels evenly.")]
+        [SerializeField, Min(1)] private int quantizedStepsPerCell = 5;
+        [Tooltip("Material that samples the atlas with texel-center snapping and the sub-texel blend. The PixelEngine/Atlas UI Sample shader with _TEXEL_BLEND. Empty uses the default UI material.")]
+        [SerializeField] private Material bilinearSamplingMaterial;
+        [Tooltip("Material that samples the atlas with the hard texel-center snap. The PixelEngine/Atlas UI Sample shader with _TEXEL_BLEND off. Empty uses the default UI material.")]
+        [SerializeField] private Material quantizedSamplingMaterial;
 
         private float pose;
         private float nadirFade;
         private Rect lastRect = Rect.zero;
+        private Material appliedMaterial;
         private bool missingReported;
 
         /// <summary>The pose value that reads the nadir cell (row 1, column 0).</summary>
@@ -107,12 +152,19 @@ namespace PixelEngine.Presentation
         /// <summary>The pose the component answers right now, slide fractions included.</summary>
         public float Pose => pose;
 
+        /// <summary>The answered pose after the sampling mode applies: in QuantizedSnap
+        /// this sits on the step grid, not on the caller's pose.</summary>
+        public float AnsweredPose { get; private set; }
+
         /// <summary>The alpha the nadir layer answers with, 0..1.</summary>
         public float NadirFade => nadirFade;
 
         /// <summary>True when a nadir fade layer is assigned, so the caller cross-fades
         /// instead of naming the nadir pose.</summary>
         public bool HasNadirLayer => nadirImage != null;
+
+        /// <summary>The shipped sampling-mode toggle (BG3).</summary>
+        public AtlasSamplingMode SamplingMode => samplingMode;
 
         public void SetAtlas(Texture2D value)
         {
@@ -130,6 +182,14 @@ namespace PixelEngine.Presentation
         public void SetNadirFade(float value)
         {
             nadirFade = math.clamp(value, 0f, 1f);
+            Apply();
+        }
+
+        /// <summary>Set the sampling mode live: the play-mode look pass toggles the
+        /// modes side by side on one scene, so no scene edit runs between reads.</summary>
+        public void SetSamplingMode(AtlasSamplingMode mode)
+        {
+            samplingMode = mode;
             Apply();
         }
 
@@ -180,18 +240,16 @@ namespace PixelEngine.Presentation
 
         private void SyncImages()
         {
-            // The default UI material honors uvRect addressing and the texture's own
-            // filter and wrap modes. A custom material answers its own uniform
-            // contract, and uvRect passes through as geometry UV only.
+            // The texture binds to each RawImage; Apply assigns the sampling-mode
+            // material. A custom material answers its own uniform contract, and
+            // uvRect passes through as geometry UV.
             if (outputImage != null)
             {
                 outputImage.texture = atlas;
-                outputImage.material = null;
             }
             if (nadirImage != null)
             {
                 nadirImage.texture = atlas;
-                nadirImage.material = null;
             }
         }
 
@@ -218,8 +276,25 @@ namespace PixelEngine.Presentation
                 zoom = 1f + (parentCamera.GetUVZoomLevel() - 1f) * cameraConfig.backgroundParallaxModifier;
             }
 
+            AnsweredPose = samplingMode == AtlasSamplingMode.QuantizedSnap
+                ? AtlasBackgroundLayout.QuantizedPose(pose, quantizedStepsPerCell)
+                : pose;
+
+            Material modeMaterial = samplingMode == AtlasSamplingMode.QuantizedSnap
+                ? quantizedSamplingMaterial
+                : bilinearSamplingMaterial;
+            if (modeMaterial != appliedMaterial)
+            {
+                appliedMaterial = modeMaterial;
+                outputImage.material = modeMaterial;
+                if (nadirImage != null)
+                {
+                    nadirImage.material = modeMaterial;
+                }
+            }
+
             lastRect = view;
-            outputImage.uvRect = AtlasBackgroundLayout.CellRect(pose, columns, rows, zoom, viewAspect, textureAspect);
+            outputImage.uvRect = AtlasBackgroundLayout.CellRect(AnsweredPose, columns, rows, zoom, viewAspect, textureAspect);
 
             if (nadirImage != null)
             {
