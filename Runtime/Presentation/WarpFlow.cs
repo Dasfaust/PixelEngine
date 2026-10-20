@@ -160,6 +160,17 @@ namespace PixelEngine.Presentation
     /// low-resolution pixel look and answers no screen-resolution grid.
     /// The grid cell the shader quantizes to is the warp texture's cell,
     /// derived here, and the material's pixel scale multiplies it.
+    ///
+    /// Composite modes: ViewportCanvas draws the RawImage on the scene's
+    /// overlay canvas, after the camera's post stack, where color clamps at
+    /// 1. CameraCanvas reparents the same RawImage onto a Screen Space -
+    /// Camera canvas at an authored plane distance, so the camera draws the
+    /// layer inside its own render texture, in the transparent pass, before
+    /// the post stack: bloom and tonemapping reach the streaks, and geometry
+    /// nearer the camera than the plane covers them by the transparent depth
+    /// test. The warp texture carries half precision in both modes so band
+    /// values above 1.0 stand at the post stack; the overlay path clamps
+    /// them at composite, as before.
     /// </summary>
     public class WarpFlow : MonoBehaviour
     {
@@ -168,6 +179,11 @@ namespace PixelEngine.Presentation
         [SerializeField] private Material warpMaterial;
         [Tooltip("Warp texture scale: 2 renders at half screen resolution and the canvas upscales. 1 renders at screen resolution.")]
         [SerializeField, Range(1, 4)] private int renderScale = 2;
+        public enum WarpComposite { ViewportCanvas = 0, CameraCanvas = 1 }
+        [Tooltip("Where the layer composites. ViewportCanvas: the scene's overlay canvas, after the camera's post stack. CameraCanvas: a Screen Space - Camera canvas inside the camera's render, before the post stack.")]
+        [SerializeField] private WarpComposite composite = WarpComposite.ViewportCanvas;
+        [Tooltip("CameraCanvas mode: how far in front of the camera the canvas plane sits. Geometry nearer than the plane covers the streaks; the cleared sky shows them.")]
+        [SerializeField, Min(1f)] private float planeDistance = 400f;
         [Tooltip("Authored focal length: the cone strength. The vanishing point sits focal x tan(gaze-travel angle) off center.")]
         [SerializeField, Min(0.01f)] private float focal = 0.3f;
         [Tooltip("The axial floor: the smallest receding component before the point is clamped far. The side views land on this floor as parallel streaks.")]
@@ -181,14 +197,36 @@ namespace PixelEngine.Presentation
 
         private Material runtimeMaterial;
         private RenderTexture warpTexture;
+        private Canvas flowCanvas;
         private bool missingReported;
 
         private void Awake()
         {
-            if (outputImage != null && warpMaterial != null)
+            Initialize();
+        }
+
+        /// <summary>Builds the material clone, the warp texture, and — in
+        /// CameraCanvas mode — the Screen Space - Camera canvas the RawImage
+        /// rides on. Awake runs it for the scene wiring. A test calls it
+        /// after it assigns the serialized fields, because AddComponent runs
+        /// Awake while every field the test would assign is still default.</summary>
+        public void Initialize()
+        {
+            if (outputImage == null || warpMaterial == null)
+            {
+                return;
+            }
+            if (runtimeMaterial == null)
             {
                 runtimeMaterial = new Material(warpMaterial);
-                // The canvas draws the RawImage with the UI default
+            }
+            if (composite == WarpComposite.CameraCanvas)
+            {
+                AttachCameraCanvas();
+            }
+            if (warpTexture == null)
+            {
+                // The canvas draws the RawImage with the authored blit
                 // material, which takes the warp texture straight; the warp
                 // shader rides only the blit into the texture.
                 warpTexture = CreateWarpTexture();
@@ -196,16 +234,61 @@ namespace PixelEngine.Presentation
             }
         }
 
+        private void AttachCameraCanvas()
+        {
+            if (flowCanvas != null)
+            {
+                return;
+            }
+            // The canvas node is a root object. Under this component's node
+            // it would sit inside the scene's overlay canvas — a nested
+            // canvas inherits its root's mode, and a root canvas is what
+            // Screen Space - Camera needs. The image's node joins this node
+            // as its child, so the reparent runs one way: the canvas is
+            // never a descendant of the image.
+            var go = new GameObject("WarpFlowCanvas");
+            go.layer = LayerMask.NameToLayer("UI");
+            flowCanvas = go.AddComponent<Canvas>();
+            // The mode falls back to Screen Space - Overlay when the canvas
+            // has no world camera at the moment the mode is set, so the
+            // camera is named first. Camera.main is the scene's pixel camera
+            // at Awake; SetFlow re-names the caller's camera every frame.
+            flowCanvas.worldCamera = Camera.main;
+            flowCanvas.renderMode = RenderMode.ScreenSpaceCamera;
+            flowCanvas.planeDistance = planeDistance;
+            // The RawImage carries its authored stretched rect and its
+            // authored blit material across the reparent, so the camera
+            // canvas draws the same image the overlay canvas drew.
+            outputImage.transform.SetParent(go.transform, false);
+        }
+
         private void OnDestroy()
         {
-            if (runtimeMaterial != null)
+            DisposeRuntime();
+        }
+
+        /// <summary>Releases the clone, the warp texture, and the camera
+        /// canvas, immediate so an EditMode teardown runs the same cleanup a
+        /// play-mode destroy runs. The canvas is a child of this component's
+        /// node, so destroying the node takes it; the explicit method is the
+        /// half a test can drive.</summary>
+        public void DisposeRuntime()
+        {
+            if (flowCanvas != null)
             {
-                Destroy(runtimeMaterial);
+                DestroyImmediate(flowCanvas.gameObject);
+                flowCanvas = null;
             }
             if (warpTexture != null)
             {
                 warpTexture.Release();
-                Destroy(warpTexture);
+                DestroyImmediate(warpTexture);
+                warpTexture = null;
+            }
+            if (runtimeMaterial != null)
+            {
+                DestroyImmediate(runtimeMaterial);
+                runtimeMaterial = null;
             }
         }
 
@@ -250,7 +333,13 @@ namespace PixelEngine.Presentation
             // minified texel — a UI scale below 1 — blends through the
             // smoothstep instead of aliasing. The pairing is the same one
             // the viewport blit rides.
-            var texture = new RenderTexture(size.x, size.y, 0, RenderTextureFormat.ARGB32)
+            // Half precision: a band at the HDR gain crosses 1.0, and an
+            // 8-bit format clamps it there. The CameraCanvas composite
+            // hands the texture through the canvas draw into the camera's
+            // HDR render, where the bloom threshold is 1.0 — a clamped
+            // format never crosses it. The overlay composite clamps at the
+            // same 1.0 it always clamped at, on its draw to the back buffer.
+            var texture = new RenderTexture(size.x, size.y, 0, RenderTextureFormat.ARGBHalf)
             {
                 name = "WarpFlow Texture",
                 filterMode = FilterMode.Bilinear
@@ -267,6 +356,15 @@ namespace PixelEngine.Presentation
                 {
                     missingReported = true;
                     Debug.LogError("WarpFlow: outputImage has no material to drive, so the warp layer answers nothing.", this);
+                }
+                return;
+            }
+            if (composite == WarpComposite.CameraCanvas && flowCanvas != null && flowCanvas.worldCamera == null)
+            {
+                if (!missingReported)
+                {
+                    missingReported = true;
+                    Debug.LogError("WarpFlow: the camera canvas has no world camera named, so the layer draws nothing.", this);
                 }
                 return;
             }
@@ -291,6 +389,20 @@ namespace PixelEngine.Presentation
             runtimeMaterial.SetFloat("_StreakDensity", streaks);
             runtimeMaterial.SetFloat("_Intensity", math.clamp(intensity, 0f, 1f));
             runtimeMaterial.SetVector("_GridCell", new Vector4(gridCell.x, gridCell.y, 0f, 0f));
+        }
+
+        /// <summary>Flow with the composite camera named. CameraCanvas mode
+        /// draws its canvas through this camera, inside the camera's own
+        /// render and before the camera's post stack. ViewportCanvas mode
+        /// composites on the overlay canvas and ignores the argument.</summary>
+        public void SetFlow(float3 viewTravelDir, float intensity, Camera targetCamera)
+        {
+            if (composite == WarpComposite.CameraCanvas && flowCanvas != null
+                && targetCamera != null && flowCanvas.worldCamera != targetCamera)
+            {
+                flowCanvas.worldCamera = targetCamera;
+            }
+            SetFlow(viewTravelDir, intensity);
         }
     }
 }
