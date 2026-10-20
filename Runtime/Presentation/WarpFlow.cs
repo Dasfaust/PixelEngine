@@ -74,6 +74,34 @@ namespace PixelEngine.Presentation
             float dist = math.length(vanishPoint - new float2(0.5f, 0.5f));
             return targetRays * 2f * math.PI * math.max(dist, 1f / (2f * math.PI));
         }
+
+        /// <summary>The ray path that covers the whole view from the vanishing
+        /// point: the farthest screen corner distance plus the margin. The
+        /// point lands off screen on the side and nadir views, and the visible
+        /// screen then starts at a distance larger than the point's distance
+        /// from center — a path that ends short of the farthest corner puts
+        /// every visible pixel past the far fade, and the layer answers
+        /// nothing. The margin is where a head dies off the edge, so the
+        /// cycle wrap reads as flow past the border and not as a pop.</summary>
+        public static float RayPath(float2 vanishPoint, float margin)
+        {
+            float far = 0f;
+            for (int i = 0; i < 4; i++)
+            {
+                var corner = new float2(i % 2, i / 2);
+                far = math.max(far, math.length(vanishPoint - corner));
+            }
+            return far + margin;
+        }
+
+        /// <summary>The streak count per ray that holds the authored per-UV
+        /// spacing across the path: count = perUv x path, so a longer path
+        /// carries proportionally more streaks and the on-screen wavelength
+        /// stays 1 / perUv at every pose.</summary>
+        public static float StreakCount(float streaksPerUv, float path)
+        {
+            return math.max(streaksPerUv * math.max(path, 0.01f), 1f);
+        }
     }
 
     /// <summary>
@@ -86,8 +114,12 @@ namespace PixelEngine.Presentation
     ///
     /// The caller names the travel direction in view space and an intensity;
     /// the rig answers the vanishing point, the axial sign, the ray count,
-    /// and the render-texture grid cell. The look parameters — streak
-    /// density, flow rate, bands, color — are authored on the material, and
+    /// the ray path, the streak count, and the render-texture grid cell. The
+    /// path and the streak count scale with the vanishing point distance:
+    /// the side and nadir views land the point off screen, and the visible
+    /// screen then starts at a larger distance, so a fixed path would put
+    /// every visible pixel past the far fade. The look parameters — flow
+    /// rate, bands, color — are authored on the material, and
     /// the per-pose values write onto a play-mode clone of it, so the
     /// authored asset never carries the runtime answer. Unity 6.6's
     /// CanvasRenderer has no MaterialPropertyBlock path, so the clone is the
@@ -110,6 +142,10 @@ namespace PixelEngine.Presentation
         [SerializeField, Range(0.01f, 1f)] private float minAxial = 0.15f;
         [Tooltip("Streak rays across the view. The ray count scales with the vanishing point distance to hold this density.")]
         [SerializeField, Min(2)] private int targetRays = 16;
+        [Tooltip("Streak spacing on the screen, in streaks per UV width. The streak count scales with the ray path to hold this spacing.")]
+        [SerializeField, Min(1f)] private float streaksPerUv = 10f;
+        [Tooltip("How far past the farthest screen corner the ray path runs. A head dies past the corner, so the cycle wrap reads as flow past the border.")]
+        [SerializeField, Min(0.02f)] private float pathMargin = 0.15f;
 
         private Material runtimeMaterial;
         private bool missingReported;
@@ -147,6 +183,8 @@ namespace PixelEngine.Presentation
             float2 vanishPoint = WarpFlowMath.VanishingPoint(viewTravelDir, focal, minAxial);
             float axialSign = WarpFlowMath.AxialSign(viewTravelDir, minAxial);
             float rays = WarpFlowMath.RayCount(targetRays, vanishPoint);
+            float path = WarpFlowMath.RayPath(vanishPoint, pathMargin);
+            float streaks = WarpFlowMath.StreakCount(streaksPerUv, path);
 
             var texture = parentCamera != null && parentCamera.GetCamera() != null
                 ? parentCamera.GetCamera().targetTexture
@@ -158,6 +196,8 @@ namespace PixelEngine.Presentation
             runtimeMaterial.SetVector("_VanishPoint", new Vector4(vanishPoint.x, vanishPoint.y, 0f, 0f));
             runtimeMaterial.SetFloat("_AxialSign", axialSign);
             runtimeMaterial.SetFloat("_RayCount", rays);
+            runtimeMaterial.SetFloat("_RayPath", path);
+            runtimeMaterial.SetFloat("_StreakDensity", streaks);
             runtimeMaterial.SetFloat("_Intensity", math.clamp(intensity, 0f, 1f));
             runtimeMaterial.SetVector("_GridCell", new Vector4(gridCell.x, gridCell.y, 0f, 0f));
         }

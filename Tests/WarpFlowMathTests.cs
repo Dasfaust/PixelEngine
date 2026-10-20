@@ -10,7 +10,10 @@ namespace PixelEngine.Tests
     /// gaze against travel converges there, the side views land mirrored far
     /// off screen as parallel flow, the converge cone mirrors the diverge cone
     /// across 90 degrees, the ray count holds the authored density as the
-    /// point moves, and a perpendicular gaze answers the tie deterministically.
+    /// point moves, the ray path covers every screen corner plus the margin
+    /// as the point moves off screen, the streak count holds the on-screen
+    /// spacing across paths, and a perpendicular gaze answers the tie
+    /// deterministically.
     /// </summary>
     public class WarpFlowMathTests
     {
@@ -139,6 +142,77 @@ namespace PixelEngine.Tests
             float far = WarpFlowMath.RayCount(target, new float2(1.5f, 0.5f));
             Assert.Greater(far, target, "a far point needs more rays for the same density");
             Assert.AreEqual(target * 2f * math.PI * 1f, far, 1e-3f, "count scales with the point distance");
+        }
+
+        [Test]
+        public void RayPath_CoversEveryScreenCorner_PlusMargin()
+        {
+            // The path is the farthest corner distance plus the margin, so a
+            // head dies past the corner at every pose. The side view lands the
+            // point far off screen and the far corner dominates: a fixed path
+            // shorter than that corner distance puts every visible pixel past
+            // the far fade, and the layer answers nothing — the fault the rule
+            // exists to refuse.
+            float margin = 0.15f;
+            foreach (float2 vp in new[]
+            {
+                new float2(0.5f, 0.5f),
+                new float2(-1.5f, 0.5f),   // yaw 90 side view
+                new float2(0.5f, 2.5f),    // nadir, point far above
+                new float2(-0.9142f, -0.9142f), // nadir yaw combo, point far below-left
+                new float2(3f, 0f)         // off-axis: the far corner is not diagonal
+            })
+            {
+                float path = WarpFlowMath.RayPath(vp, margin);
+                foreach (int i in new[] { 0, 1, 2, 3 })
+                {
+                    var corner = new float2(i % 2, i / 2);
+                    Assert.LessOrEqual(math.length(vp - corner), path - margin + 1e-5f,
+                        $"corner {corner} for {vp} must sit inside the path");
+                }
+                Assert.AreEqual(margin, path - FarthestCornerDistance(vp), 1e-4f, $"margin for {vp}");
+            }
+        }
+
+        private static float FarthestCornerDistance(float2 vp)
+        {
+            float far = 0f;
+            foreach (int i in new[] { 0, 1, 2, 3 })
+                far = math.max(far, math.length(vp - new float2(i % 2, i / 2)));
+            return far;
+        }
+
+        [Test]
+        public void RayPath_SideViewKeepsEveryVisiblePixelInsideTheFarFade()
+        {
+            // The reported fault, stated as a rule: at the side view the point
+            // sits far off screen, and every screen corner must answer a
+            // positive far fade so the streaks stay visible.
+            float2 vp = new float2(-1.5f, 0.5f);
+            float path = WarpFlowMath.RayPath(vp, 0.15f);
+            float farFadeRate = 3f;
+            foreach (int i in new[] { 0, 1, 2, 3 })
+            {
+                var corner = new float2(i % 2, i / 2);
+                float fade = math.saturate((path - math.length(vp - corner)) * farFadeRate);
+                Assert.Greater(fade, 0f, $"corner {corner} answers a visible fade, not zero");
+            }
+        }
+
+        [Test]
+        public void StreakCount_HoldsOnScreenSpacing_AcrossPaths()
+        {
+            // The on-screen wavelength is path / count = 1 / perUv at every
+            // pose, so a longer path carries proportionally more streaks and
+            // the spacing a reader sees never moves with the pose.
+            float perUv = 10f;
+            float nearCount = WarpFlowMath.StreakCount(perUv, 0.9f);
+            float farCount = WarpFlowMath.StreakCount(perUv, 2.7f);
+            Assert.AreEqual(1f / perUv, 0.9f / nearCount, 1e-4f, "near spacing");
+            Assert.AreEqual(1f / perUv, 2.7f / farCount, 1e-4f, "far spacing");
+            Assert.AreEqual(0.9f / 2.7f, nearCount / farCount, 1e-4f, "count scales with the path");
+
+            Assert.GreaterOrEqual(WarpFlowMath.StreakCount(perUv, 0.01f), 1f, "a tiny path still carries a streak");
         }
 
         [Test]
