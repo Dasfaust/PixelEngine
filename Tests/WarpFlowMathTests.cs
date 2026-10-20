@@ -207,6 +207,26 @@ namespace PixelEngine.Tests
         }
 
         [Test]
+        public void WarpResolution_DividesTheScreenByTheScale_InWholePixels()
+        {
+            var half = WarpFlowMath.WarpResolution(2704, 1436, 2);
+            Assert.AreEqual(1352, half.x, "half width");
+            Assert.AreEqual(718, half.y, "half height");
+
+            var full = WarpFlowMath.WarpResolution(2704, 1436, 1);
+            Assert.AreEqual(2704, full.x, "scale 1 keeps the screen");
+            Assert.AreEqual(1436, full.y, "scale 1 keeps the screen");
+
+            var quarter = WarpFlowMath.WarpResolution(2704, 1436, 4);
+            Assert.AreEqual(676, quarter.x, "quarter width");
+            Assert.AreEqual(359, quarter.y, "quarter height");
+
+            var tiny = WarpFlowMath.WarpResolution(1, 1, 4);
+            Assert.AreEqual(1, tiny.x, "floors at one pixel");
+            Assert.AreEqual(1, tiny.y, "floors at one pixel");
+        }
+
+        [Test]
         public void StreakCount_CycleWrapDropIsWhole_TheSeamlessCondition()
         {
             // The cycle wrap drops the head by one path, and one path is the

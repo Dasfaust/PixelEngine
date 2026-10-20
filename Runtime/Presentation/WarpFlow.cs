@@ -108,19 +108,30 @@ namespace PixelEngine.Presentation
         {
             return math.max(math.round(streaksPerUv * math.max(path, 0.01f)), 1f);
         }
+
+        /// <summary>The warp texture resolution: the screen resolution divided
+        /// by the authored render scale in whole pixels, floored at 1. The
+        /// canvas upscales the texture point-filtered, so the warp pixels are
+        /// scale screen pixels wide at scale 1, uniform across the frame.</summary>
+        public static int2 WarpResolution(int width, int height, int scale)
+        {
+            int s = math.max(scale, 1);
+            return new int2(math.max(width / s, 1), math.max(height / s, 1));
+        }
     }
 
     /// <summary>
-    /// Warp streak layer: drives a RawImage with the PixelEngine/Warp Flow
-    /// shader. The layer sits behind the viewport blit and in front of the
-    /// background, so the world geometry the camera renders streams in front
-    /// of the streaks and the sky stays behind them. The camera stays free:
-    /// warp is simulated travel time, and nothing in this component touches
-    /// the camera pose.
+    /// Warp streak layer: renders the streak field into a RenderTexture at
+    /// screen resolution divided by the authored render scale, and blits that
+    /// texture through a RawImage with point filtering. The layer sits behind
+    /// the viewport blit and in front of the background, so the world geometry
+    /// the camera renders streams in front of the streaks and the sky stays
+    /// behind them. The camera stays free: warp is simulated travel time, and
+    /// nothing in this component touches the camera pose.
     ///
     /// The caller names the travel direction in view space and an intensity;
     /// the rig answers the vanishing point, the axial sign, the ray count,
-    /// the ray path, the streak count, and the render-texture grid cell. The
+    /// the ray path, the streak count, and the warp-texture grid cell. The
     /// path and the streak count scale with the vanishing point distance:
     /// the side and nadir views land the point off screen, and the visible
     /// screen then starts at a larger distance, so a fixed path would put
@@ -132,16 +143,20 @@ namespace PixelEngine.Presentation
     /// per-layer write surface. No game concept crosses the seam: "game
     /// north" is the caller's, not this component's.
     ///
-    /// Grid: the streaks quantize to the viewport render-texture cells, the
-    /// same on-screen pixel size as the world, so the effect rides the pixel
-    /// grid it shares. The cell comes from the parent camera's target
-    /// texture; a camera with no texture yet answers a placeholder cell and
-    /// re-answers on the next push.
+    /// Render path: the rig blits the clone into the warp texture each late
+    /// update and hands the texture to the RawImage, which the canvas draws
+    /// with the built-in UI material. The warp pixels are the warp texture's
+    /// pixels — whole, uniform, upscale-stable — so the layer shares the
+    /// world's low-resolution pixel look and answers no screen-resolution
+    /// grid. The grid cell the shader quantizes to is the warp texture's
+    /// cell, derived here, and the material's pixel scale multiplies it. The
+    /// texture is Point-filtered so the canvas blit stays crisp.
     /// </summary>
     public class WarpFlow : MonoBehaviour
     {
         [SerializeField] private RawImage outputImage;
-        [SerializeField] private SubpixelCameraBase parentCamera;
+        [Tooltip("Warp texture scale: 2 renders at half screen resolution and the canvas upscales. 1 renders at screen resolution.")]
+        [SerializeField, Range(1, 4)] private int renderScale = 2;
         [Tooltip("Authored focal length: the cone strength. The vanishing point sits focal x tan(gaze-travel angle) off center.")]
         [SerializeField, Min(0.01f)] private float focal = 0.3f;
         [Tooltip("The axial floor: the smallest receding component before the point is clamped far. The side views land on this floor as parallel streaks.")]
@@ -154,6 +169,7 @@ namespace PixelEngine.Presentation
         [SerializeField, Min(0.02f)] private float pathMargin = 0.15f;
 
         private Material runtimeMaterial;
+        private RenderTexture warpTexture;
         private bool missingReported;
 
         private void Awake()
@@ -161,7 +177,12 @@ namespace PixelEngine.Presentation
             if (outputImage != null && outputImage.material != null)
             {
                 runtimeMaterial = new Material(outputImage.material);
-                outputImage.material = runtimeMaterial;
+                // The canvas draws the warp texture with the built-in UI
+                // material; the warp shader rides the blit into the texture,
+                // not the canvas pass.
+                outputImage.material = null;
+                warpTexture = CreateWarpTexture();
+                outputImage.texture = warpTexture;
             }
         }
 
@@ -171,6 +192,51 @@ namespace PixelEngine.Presentation
             {
                 Destroy(runtimeMaterial);
             }
+            if (warpTexture != null)
+            {
+                warpTexture.Release();
+                Destroy(warpTexture);
+            }
+        }
+
+        private void LateUpdate()
+        {
+            if (outputImage == null || runtimeMaterial == null)
+            {
+                return;
+            }
+            var wanted = WarpFlowMath.WarpResolution(Screen.width, Screen.height, renderScale);
+            if (warpTexture == null || warpTexture.width != wanted.x || warpTexture.height != wanted.y)
+            {
+                if (warpTexture != null)
+                {
+                    warpTexture.Release();
+                    Destroy(warpTexture);
+                }
+                warpTexture = CreateWarpTexture();
+                outputImage.texture = warpTexture;
+            }
+
+            // Clear before the blit: a blit from no source leaves the texture
+            // to the material's writes, and the cleared floor keeps the
+            // transparent floor deterministic frame to frame.
+            var previous = RenderTexture.active;
+            RenderTexture.active = warpTexture;
+            GL.Clear(true, false, Color.clear);
+            Graphics.Blit((Texture)null, warpTexture, runtimeMaterial);
+            RenderTexture.active = previous;
+        }
+
+        private RenderTexture CreateWarpTexture()
+        {
+            var size = WarpFlowMath.WarpResolution(Screen.width, Screen.height, renderScale);
+            var texture = new RenderTexture(size.x, size.y, 0, RenderTextureFormat.ARGB32)
+            {
+                name = "WarpFlow Texture",
+                filterMode = FilterMode.Point
+            };
+            texture.Create();
+            return texture;
         }
 
         public void SetFlow(float3 viewTravelDir, float intensity)
@@ -192,11 +258,10 @@ namespace PixelEngine.Presentation
             float path = WarpFlowMath.RayPath(vanishPoint, pathMargin);
             float streaks = WarpFlowMath.StreakCount(streaksPerUv, path);
 
-            var texture = parentCamera != null && parentCamera.GetCamera() != null
-                ? parentCamera.GetCamera().targetTexture
-                : null;
-            float2 gridCell = texture != null && texture.width > 0 && texture.height > 0
-                ? new float2(1f / texture.width, 1f / texture.height)
+            // The shader quantizes to the warp texture's own cells; the
+            // material's pixel scale multiplies them from here.
+            float2 gridCell = warpTexture != null && warpTexture.width > 0 && warpTexture.height > 0
+                ? new float2(1f / warpTexture.width, 1f / warpTexture.height)
                 : new float2(0.005f, 0.005f);
 
             runtimeMaterial.SetVector("_VanishPoint", new Vector4(vanishPoint.x, vanishPoint.y, 0f, 0f));
