@@ -267,21 +267,19 @@ namespace PixelEngine.Presentation
 
         private void OnDestroy()
         {
-            DisposeRuntime();
+            // Scene teardown destroys the canvas node with the scene. A
+            // DestroyImmediate on it from here runs while Unity is mid-destroy
+            // of that same object, and Unity logs "Destroying object multiple
+            // times" — recorded on a build's scene teardown on 6000.6.4f1.
+            // The runtime assets are what the scene does not carry, so the
+            // destroy path releases only those. DisposeRuntime is the full
+            // form for tests and for a mid-session swap.
+            ReleaseRuntimeAssets();
+            flowCanvas = null;
         }
 
-        /// <summary>Releases the clone, the warp texture, and the camera
-        /// canvas, immediate so an EditMode teardown runs the same cleanup a
-        /// play-mode destroy runs. The canvas is a child of this component's
-        /// node, so destroying the node takes it; the explicit method is the
-        /// half a test can drive.</summary>
-        public void DisposeRuntime()
+        private void ReleaseRuntimeAssets()
         {
-            if (flowCanvas != null)
-            {
-                DestroyImmediate(flowCanvas.gameObject);
-                flowCanvas = null;
-            }
             if (warpTexture != null)
             {
                 warpTexture.Release();
@@ -293,6 +291,21 @@ namespace PixelEngine.Presentation
                 DestroyImmediate(runtimeMaterial);
                 runtimeMaterial = null;
             }
+        }
+
+        /// <summary>Releases the warp texture, the runtime material clone,
+        /// and the camera canvas, immediate so an EditMode teardown runs the
+        /// same cleanup a play-mode destroy runs. The canvas is destroyed
+        /// with its node, so this full form is the half a test drives and
+        /// the half a mid-session composite swap drives.</summary>
+        public void DisposeRuntime()
+        {
+            if (flowCanvas != null)
+            {
+                DestroyImmediate(flowCanvas.gameObject);
+                flowCanvas = null;
+            }
+            ReleaseRuntimeAssets();
         }
 
         private void LateUpdate()
