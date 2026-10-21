@@ -149,6 +149,14 @@ namespace PixelEngine.Presentation
         /// <summary>The pose value that reads the nadir cell (row 1, column 0).</summary>
         public int NadirPoseIndex => columns;
 
+        /// <summary>Yaw cells in the atlas grid: the atlas width is this many cells. A bake sizes
+        /// its strip from this number, so the bake and the rig name one grid.</summary>
+        public int Columns => columns;
+
+        /// <summary>Cell rows in the atlas grid: row 0 carries the yaw cells, row 1 the nadir image.
+        /// Two is the smallest grid the nadir rule can live in.</summary>
+        public int Rows => rows;
+
         /// <summary>The pose the component answers right now, slide fractions included.</summary>
         public float Pose => pose;
 
