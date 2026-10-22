@@ -83,7 +83,7 @@ namespace PixelEngine.Tests
         public void CacheFileName_NamesTheSeedAndTheBakeSize()
         {
             string first = StarfieldBakeLayout.CacheFileName(7, 7712, 1088);
-            Assert.AreEqual("starfield-7-7712x1088.png", first);
+            Assert.AreEqual("starfield-7-7712x1088.deflate", first);
 
             Assert.AreNotEqual(first, StarfieldBakeLayout.CacheFileName(8, 7712, 1088),
                 "A seed change names a new file, so a re-entry bakes and never reads another seed's picture.");
@@ -93,11 +93,92 @@ namespace PixelEngine.Tests
                 "One seed at one size names one file, so a re-entry hits the standing bake.");
         }
 
+        // Streaming hash
+
+        [Test]
+        public void HashBytes_StreamedOverRgbaBytes_AnswersTheTexelArrayHash()
+        {
+            var pixels = new Color32[6 * 4];
+            uint seed = 24681u;
+            for (int i = 0; i < pixels.Length; i++)
+            {
+                seed = seed * 1103515245u + 12345u;
+                pixels[i] = new Color32(
+                    (byte)(seed & 0xFF),
+                    (byte)((seed >> 8) & 0xFF),
+                    (byte)((seed >> 16) & 0xFF),
+                    (byte)((seed >> 24) & 0xFF));
+            }
+
+            var bytes = new byte[pixels.Length * 4];
+            for (int i = 0; i < pixels.Length; i++)
+            {
+                bytes[i * 4] = pixels[i].r;
+                bytes[i * 4 + 1] = pixels[i].g;
+                bytes[i * 4 + 2] = pixels[i].b;
+                bytes[i * 4 + 3] = pixels[i].a;
+            }
+
+            ulong streamed = StarfieldBakeSeam.HashBytes(StarfieldBakeSeam.HashSeed, bytes, 0, bytes.Length);
+            Assert.AreEqual(StarfieldBakeSeam.Hash(pixels), streamed,
+                "A byte run in texel order folds to the same number as the texel array it came from, so a " +
+                "caller that streams a file hashes the atlas it decodes.");
+        }
+
+        [Test]
+        public void HashBytes_PieceFolds_AddToTheWholeNumber()
+        {
+            int length = 5000;
+            var bytes = new byte[length];
+            uint seed = 97531u;
+            for (int i = 0; i < length; i++)
+            {
+                seed = seed * 1103515245u + 12345u;
+                bytes[i] = (byte)(seed >> 7);
+            }
+
+            ulong whole = StarfieldBakeSeam.HashBytes(StarfieldBakeSeam.HashSeed, bytes, 0, length);
+            ulong first = StarfieldBakeSeam.HashBytes(StarfieldBakeSeam.HashSeed, bytes, 0, 1800);
+            ulong second = StarfieldBakeSeam.HashBytes(first, bytes, 1800, 2200);
+            ulong streamed = StarfieldBakeSeam.HashBytes(second, bytes, 4000, 1000);
+            Assert.AreEqual(whole, streamed,
+                "A fold that keeps its running value across pieces answers the number of one pass over the " +
+                "same bytes, so a staged reader can hash one piece per frame.");
+        }
+
+        [Test]
+        public void HashZeros_FoldsTheSameNumberAsTheSameCountOfZeroBytes()
+        {
+            int count = 4096;
+            var zeros = new byte[count];
+            ulong looped = StarfieldBakeSeam.HashBytes(StarfieldBakeSeam.HashSeed, zeros, 0, count);
+            ulong powered = StarfieldBakeSeam.HashZeros(StarfieldBakeSeam.HashSeed, count);
+            Assert.AreEqual(looped, powered,
+                "A zero byte leaves the hash at hash times the prime, so a run of them is a power, and the " +
+                "empty part of an atlas folds without a loop over its bytes.");
+            Assert.AreEqual(looped, StarfieldBakeSeam.HashZeros(looped, 0),
+                "A run of no bytes leaves the standing hash alone.");
+        }
+
+        [Test]
+        public void DivisorAtOrBelow_NarrowsTheRequestToAnEvenSplit()
+        {
+            Assert.AreEqual(64, StarfieldBakeLayout.DivisorAtOrBelow(1088, 64),
+                "64 rows divide 1088 evenly, so a cache step runs 17 bands of the same byte count.");
+            Assert.AreEqual(68, StarfieldBakeLayout.DivisorAtOrBelow(1088, 100),
+                "100 divides nothing, and 68 is the largest divisor at or below it.");
+            Assert.AreEqual(1, StarfieldBakeLayout.DivisorAtOrBelow(7, 4),
+                "A total with no divisor between 1 and the request splits into one band.");
+            Assert.AreEqual(1, StarfieldBakeLayout.DivisorAtOrBelow(0, 64),
+                "A total of zero answers 1, so a caller never divides a band count by zero.");
+            Assert.AreEqual(1088, StarfieldBakeLayout.DivisorAtOrBelow(1088, 4096),
+                "A request above the total is read as the total, so one band holds the whole.");
+        }
+
         [Test]
         public void MemoryBytes_CountsUncompressedRgba32()
         {
-            long bytes = StarfieldBakeLayout.MemoryBytes(7712, 1088);
-            Assert.AreEqual(7712L * 1088L * 4L, bytes, "Four bytes per texel, no mipmaps, no compression.");
+            long bytes = StarfieldBakeLayout.MemoryBytes(7712, 1088);            Assert.AreEqual(7712L * 1088L * 4L, bytes, "Four bytes per texel, no mipmaps, no compression.");
         }
 
         [Test]

@@ -1,3 +1,4 @@
+using Unity.Mathematics;
 using UnityEngine;
 
 namespace PixelEngine.Presentation
@@ -18,6 +19,8 @@ namespace PixelEngine.Presentation
     /// </summary>
     public static class StarfieldBakeSeam
     {
+        const ulong Prime = 1099511628211UL;
+
         /// <summary>Interior column pairs are sampled every this many columns, so the readout
         /// measures the strip's own spacing and not every texel in it.</summary>
         public const int InteriorColumnStride = 4;
@@ -83,8 +86,7 @@ namespace PixelEngine.Presentation
         /// </summary>
         public static ulong Hash(Color32[] pixels)
         {
-            const ulong Prime = 1099511628211UL;
-            ulong hash = 14695981039346656037UL;
+            ulong hash = HashSeed;
             for (int i = 0; i < pixels.Length; i++)
             {
                 hash = (hash ^ pixels[i].r) * Prime;
@@ -94,6 +96,52 @@ namespace PixelEngine.Presentation
             }
 
             return hash;
+        }
+
+        /// <summary>The FNV-1a offset basis: the value a hash run starts from.</summary>
+        public const ulong HashSeed = 14695981039346656037UL;
+
+        /// <summary>
+        /// The atlas hash over one run of texel bytes: RGBA bytes in texel order, the layout a
+        /// <c>Color32</c> array holds in memory. A run folds into the standing hash value, so a caller
+        /// that hashes a big atlas in pieces answers the same number as a caller that hashes it whole,
+        /// and the piece order is the texel order. A caller that streams a file feeds this call once
+        /// per piece and keeps the returned value for the next piece.
+        /// </summary>
+        public static ulong HashBytes(ulong hash, byte[] bytes, int start, int count)
+        {
+            int last = math.min(start + count, bytes.Length);
+            for (int i = math.max(start, 0); i < last; i++)
+            {
+                hash = (hash ^ bytes[i]) * Prime;
+            }
+
+            return hash;
+        }
+
+        /// <summary>
+        /// The atlas hash over a run of bytes the caller never materializes: the empty part of the
+        /// atlas. Folding a zero byte leaves the hash at <c>hash * Prime</c>, so a run of zeros folds
+        /// to <c>hash * Prime^count</c>, and that power is a whole number of multiplications. The
+        /// answer equals the answer of the same number of zero bytes passed to <see cref="HashBytes"/>.
+        /// </summary>
+        public static ulong HashZeros(ulong hash, long count)
+        {
+            ulong factor = 1UL;
+            ulong baseValue = Prime;
+            long left = math.max(count, 0L);
+            while (left > 0L)
+            {
+                if ((left & 1L) == 1L)
+                {
+                    factor *= baseValue;
+                }
+
+                baseValue *= baseValue;
+                left >>= 1;
+            }
+
+            return hash * factor;
         }
 
         /// <summary>The mean channel difference between two texels, in 0..255.</summary>

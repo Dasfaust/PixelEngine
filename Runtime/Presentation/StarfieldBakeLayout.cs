@@ -72,17 +72,42 @@ namespace PixelEngine.Presentation
         /// <summary>
         /// The cache file name for one bake: the seed and the atlas size it was baked at. A seed
         /// change or a resolution change names a different file, so a re-entry hits the bake it
-        /// asked for and never reads a picture baked at another size.
+        /// asked for and never reads a picture baked at another size. The file carries the atlas texels
+        /// deflated, so a reader expands it in pieces and writes the texels in pieces, and no single
+        /// call builds the whole atlas.
         /// </summary>
         public static string CacheFileName(int seed, int atlasWidth, int atlasHeight)
         {
-            return $"starfield-{seed}-{atlasWidth}x{atlasHeight}.png";
+            return $"starfield-{seed}-{atlasWidth}x{atlasHeight}.deflate";
         }
 
         /// <summary>The cache file path under a folder the caller owns.</summary>
         public static string CachePath(string folder, int seed, int atlasWidth, int atlasHeight)
         {
             return $"{folder}/{CacheFileName(seed, atlasWidth, atlasHeight)}";
+        }
+
+        /// <summary>
+        /// The largest divisor of <c>total</c> at or below <c>requested</c>, and never below 1. A caller
+        /// that splits a whole into equal pieces takes this number, so every piece costs the same and no
+        /// piece comes out short. A total of zero answers 1.
+        /// </summary>
+        public static int DivisorAtOrBelow(int total, int requested)
+        {
+            if (total <= 0)
+            {
+                return 1;
+            }
+
+            for (int candidate = math.min(math.max(requested, 1), total); candidate >= 2; candidate--)
+            {
+                if (total % candidate == 0)
+                {
+                    return candidate;
+                }
+            }
+
+            return 1;
         }
 
         /// <summary>The atlas's memory in bytes: width × height × 4, the uncompressed RGBA32 cost.</summary>
