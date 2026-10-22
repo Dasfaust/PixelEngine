@@ -1,3 +1,4 @@
+using System;
 using UnityEngine;
 using Unity.Mathematics;
 
@@ -22,7 +23,14 @@ namespace PixelEngine.Presentation
     /// <see cref="WriteToMaterial"/> writes one pass's numbers onto a material, together with
     /// <c>_FieldDims</c>: the bake target size, which is also the period every lattice inside the
     /// field wraps at.
+    ///
+    /// The struct is <c>[Serializable]</c> so a MonoBehaviour can carry one as an Inspector field. The
+    /// bake driver does: an authored override holds the numbers a person tuned, and Unity writes the
+    /// fields into the scene only when the type carries the attribute. Without it a
+    /// <c>[SerializeField]</c> field of this type is ignored, the Inspector shows nothing, and the
+    /// override reads the struct's default values in play mode.
     /// </summary>
+    [Serializable]
     public struct StarfieldBakeRecipe
     {
         public int Seed;
