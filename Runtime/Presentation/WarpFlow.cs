@@ -118,6 +118,60 @@ namespace PixelEngine.Presentation
             int s = math.max(scale, 1);
             return new int2(math.max(width / s, 1), math.max(height / s, 1));
         }
+
+        /// <summary>The flow rate the layer runs at for a given intensity: the
+        /// authored full rate scaled by that intensity, so the streak speed
+        /// reads the warp strength. The rule is linear: half intensity is half
+        /// speed, full intensity is the authored rate, zero intensity is
+        /// stopped. The floor fraction is the fraction of the full rate a
+        /// stopped warp keeps, so floor 0 gives the plain linear rule and floor
+        /// 0.25 runs at a quarter speed at zero intensity. Intensity is clamped
+        /// to 0..1 first, so an over-range caller cannot speed the flow past
+        /// the authored rate.
+        ///
+        /// The authored rate enters as a number and never as live state, so
+        /// calling this with the same intensity any number of times answers the
+        /// same rate. A caller that feeds back the value it last wrote would
+        /// decay the flow to zero, and this shape is why it does not need to
+        /// keep the authored value anywhere.</summary>
+        public static float FlowRate(float authoredRate, float intensity, float floorFraction)
+        {
+            float clamped = math.clamp(intensity, 0f, 1f);
+            float floor = math.clamp(floorFraction, 0f, 1f);
+            return authoredRate * (floor + (1f - floor) * clamped);
+        }
+
+        /// <summary>The flow clock advance one frame buys: the rate times the
+        /// elapsed time, with the elapsed time capped at <c>stepCapSeconds</c>.
+        /// The cap is what a stalled frame, a tab-out, or a debugger pause
+        /// costs: the clock jumps the capped step and the streaks skip, where
+        /// an uncapped delta would send the pattern a long way in one frame.
+        /// A non-positive elapsed time advances nothing, so a caller that
+        /// repeats the same clock value writes the same clock.</summary>
+        public static float FlowStep(float rate, float elapsedSeconds, float stepCapSeconds)
+        {
+            float elapsed = math.clamp(elapsedSeconds, 0f, math.max(stepCapSeconds, 0f));
+            return math.max(rate, 0f) * elapsed;
+        }
+
+        /// <summary>The flow clock after one frame, kept in [0, 1). The clock is
+        /// accumulated and never rebuilt from the wall clock, which is the rule
+        /// that keeps the streak direction fixed.
+        ///
+        /// A clock built as rate x absolute time moves per frame by
+        /// rate x deltaTime + time x deltaRate, so the rate's own change enters
+        /// the motion, weighted by how large the time has grown. A rate that
+        /// falls then moves the clock backwards and the streaks run in reverse.
+        /// Accumulating rate x deltaTime keeps the per-frame advance equal to the
+        /// rate, so a falling rate slows the streaks and never turns them.
+        ///
+        /// The wrap keeps the clock in the shader's own cycle range, so a long
+        /// warp does not push a large number into a float.</summary>
+        public static float AdvancePhase(float phase, float rate, float elapsedSeconds, float stepCapSeconds)
+        {
+            float wrapped = phase + FlowStep(rate, elapsedSeconds, stepCapSeconds);
+            return wrapped - math.floor(wrapped);
+        }
     }
 
     /// <summary>
@@ -135,8 +189,8 @@ namespace PixelEngine.Presentation
     /// path and the streak count scale with the vanishing point distance:
     /// the side and nadir views land the point off screen, and the visible
     /// screen then starts at a larger distance, so a fixed path would put
-    /// every visible pixel past the far fade. The look parameters — flow
-    /// rate, bands, color — are authored on the material, and
+    /// every visible pixel past the far fade. The look parameters — the full
+    /// flow rate, bands, color — are authored on the material, and
     /// the per-pose values write onto a play-mode clone of it, so the
     /// authored asset never carries the runtime answer. Unity 6.6's
     /// CanvasRenderer has no MaterialPropertyBlock path, so the clone is the
@@ -178,16 +232,30 @@ namespace PixelEngine.Presentation
         [SerializeField, Min(1f)] private float streaksPerUv = 10f;
         [Tooltip("How far past the farthest screen corner the ray path runs. A head dies past the corner, so the cycle wrap reads as flow past the border.")]
         [SerializeField, Min(0.02f)] private float pathMargin = 0.15f;
+        [Tooltip("Flow rate at zero intensity, as a fraction of the material's authored Flow Rate. 0 is the linear rule: the streaks stop with the warp. A quarter leaves a quarter speed standing, so a faint layer keeps moving.")]
+        [SerializeField, Range(0f, 1f)] private float flowRateFloor = 0f;
+        [Tooltip("The largest elapsed time one frame may add to the flow clock, in seconds. A stalled frame, a tab-out, or a paused debugger reports a large elapsed time; the cap makes that a skip and not a jump.")]
+        [SerializeField, Min(0.001f)] private float flowStepCapSeconds = 0.1f;
 
         private Material runtimeMaterial;
         private RenderTexture warpTexture;
         private bool missingReported;
+        private float authoredFlowRate;
+        private bool flowRateReadable;
+        private float flowPhase;
+        private double lastPhaseTime = -1;
 
         private void Awake()
         {
             if (outputImage != null && warpMaterial != null)
             {
                 runtimeMaterial = new Material(warpMaterial);
+                // The authored full rate is read once, off the authored material,
+                // before any write lands on the clone. The scale multiplies this
+                // number every frame, so a value read back off the clone after a
+                // write would compound and decay the flow toward zero.
+                flowRateReadable = warpMaterial.HasProperty("_FlowRate");
+                authoredFlowRate = flowRateReadable ? warpMaterial.GetFloat("_FlowRate") : 0f;
                 // The canvas draws the RawImage with the UI default
                 // material, which takes the warp texture straight; the warp
                 // shader rides only the blit into the texture.
@@ -290,6 +358,26 @@ namespace PixelEngine.Presentation
             runtimeMaterial.SetFloat("_RayPath", path);
             runtimeMaterial.SetFloat("_StreakDensity", streaks);
             runtimeMaterial.SetFloat("_Intensity", math.clamp(intensity, 0f, 1f));
+            // The streak speed reads the intensity: the authored Flow Rate is the
+            // rate at full warp, and the same number drives brightness, so the
+            // layer's speed and its strength move together. _FlowRate carries the
+            // rate the rig is running at, which is the number a live read checks.
+            float rate = WarpFlowMath.FlowRate(authoredFlowRate, intensity, flowRateFloor);
+            if (flowRateReadable)
+            {
+                runtimeMaterial.SetFloat("_FlowRate", rate);
+            }
+            // The clock accumulates, once per frame, and the shader reads it as given.
+            // A caller may call this method more than once in a frame; the frame stamp
+            // is what keeps a repeated call from advancing the clock twice.
+            double now = Time.timeAsDouble;
+            if (now != lastPhaseTime)
+            {
+                flowPhase = WarpFlowMath.AdvancePhase(
+                    flowPhase, rate, (float)(now - (lastPhaseTime < 0d ? now : lastPhaseTime)), flowStepCapSeconds);
+                lastPhaseTime = now;
+            }
+            runtimeMaterial.SetFloat("_FlowPhase", flowPhase);
             runtimeMaterial.SetVector("_GridCell", new Vector4(gridCell.x, gridCell.y, 0f, 0f));
         }
     }
