@@ -297,5 +297,81 @@ namespace PixelEngine.Tests
                 Assert.AreEqual(0.5f, vp.y, 1e-5f, $"y for {viewDir}");
             }
         }
+
+        // Flow rate and intensity: the streak speed reads the warp strength. The authored
+        // Flow Rate is the rate at full intensity, and the rule is a linear scale.
+        private const float AuthoredRate = 0.3f;
+
+        [Test]
+        public void FlowRate_HalfIntensity_AnswersHalfTheAuthoredRate()
+        {
+            Assert.AreEqual(0.15f, WarpFlowMath.FlowRate(AuthoredRate, 0.5f, 0f), 1e-6f, "half");
+        }
+
+        [Test]
+        public void FlowRate_FullIntensity_AnswersTheAuthoredRate()
+        {
+            Assert.AreEqual(AuthoredRate, WarpFlowMath.FlowRate(AuthoredRate, 1f, 0f), 1e-6f, "full");
+        }
+
+        [Test]
+        public void FlowRate_ZeroIntensity_StopsTheFlow_UnlessAFloorIsAuthored()
+        {
+            Assert.AreEqual(0f, WarpFlowMath.FlowRate(AuthoredRate, 0f, 0f), 1e-6f, "floor 0");
+            Assert.AreEqual(0.075f, WarpFlowMath.FlowRate(AuthoredRate, 0f, 0.25f), 1e-6f, "floor 0.25");
+        }
+
+        [Test]
+        public void FlowRate_IsLinearAcrossTheRange()
+        {
+            // One step of intensity buys one equal step of rate, so a curve that ramps
+            // intensity reads as a ramp of speed and not as a curve of speed.
+            float previous = WarpFlowMath.FlowRate(AuthoredRate, 0f, 0f);
+            float step = WarpFlowMath.FlowRate(AuthoredRate, 0.2f, 0f) - previous;
+            for (int i = 1; i <= 5; i++)
+            {
+                float rate = WarpFlowMath.FlowRate(AuthoredRate, i * 0.2f, 0f);
+                Assert.AreEqual(step, rate - previous, 1e-6f, $"step {i}");
+                previous = rate;
+            }
+            Assert.AreEqual(AuthoredRate, previous, 1e-6f, "lands on the authored rate");
+        }
+
+        [Test]
+        public void FlowRate_OutOfRangeIntensity_ClampsToTheAuthoredRate()
+        {
+            Assert.AreEqual(AuthoredRate, WarpFlowMath.FlowRate(AuthoredRate, 2f, 0f), 1e-6f, "above 1");
+            Assert.AreEqual(0f, WarpFlowMath.FlowRate(AuthoredRate, -1f, 0f), 1e-6f, "below 0");
+        }
+
+        [Test]
+        public void FlowRate_FloorFractions_AreClampedAndLandBetween()
+        {
+            Assert.AreEqual(AuthoredRate, WarpFlowMath.FlowRate(AuthoredRate, 0f, 2f), 1e-6f, "floor above 1");
+            Assert.AreEqual(0f, WarpFlowMath.FlowRate(AuthoredRate, 0f, -0.5f), 1e-6f, "floor below 0");
+            for (int i = 0; i <= 10; i++)
+            {
+                float intensity = i * 0.1f;
+                float rate = WarpFlowMath.FlowRate(AuthoredRate, intensity, 0.4f);
+                Assert.GreaterOrEqual(rate, 0.12f, $"floor at intensity {intensity}");
+                Assert.LessOrEqual(rate, AuthoredRate, $"cap at intensity {intensity}");
+            }
+        }
+
+        [Test]
+        public void FlowRate_RepeatedCalls_AnswerTheSameRate_AboutTheAuthoredValue()
+        {
+            // The authored rate is the input every time, so the scale cannot feed itself.
+            // A caller that wrote the scaled value back as its authored value would walk
+            // the flow to zero, and this is the line that says the rule does not ask the
+            // caller to store anything.
+            float first = WarpFlowMath.FlowRate(AuthoredRate, 0.5f, 0f);
+            float second = WarpFlowMath.FlowRate(AuthoredRate, 0.5f, 0f);
+            float third = WarpFlowMath.FlowRate(first, 0.5f, 0f);
+            float fourth = WarpFlowMath.FlowRate(third, 0.5f, 0f);
+            Assert.AreEqual(first, second, 1e-6f, "pure call");
+            Assert.AreEqual(0.075f, third, 1e-6f, "a fed-back value scales again, which is the compounding shape to avoid");
+            Assert.AreEqual(0.0375f, fourth, 1e-6f, "the fed-back chain walks the flow toward zero");
+        }
     }
 }

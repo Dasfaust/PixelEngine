@@ -118,6 +118,28 @@ namespace PixelEngine.Presentation
             int s = math.max(scale, 1);
             return new int2(math.max(width / s, 1), math.max(height / s, 1));
         }
+
+        /// <summary>The flow rate the layer runs at for a given intensity: the
+        /// authored full rate scaled by that intensity, so the streak speed
+        /// reads the warp strength. The rule is linear: half intensity is half
+        /// speed, full intensity is the authored rate, zero intensity is
+        /// stopped. The floor fraction is the fraction of the full rate a
+        /// stopped warp keeps, so floor 0 gives the plain linear rule and floor
+        /// 0.25 runs at a quarter speed at zero intensity. Intensity is clamped
+        /// to 0..1 first, so an over-range caller cannot speed the flow past
+        /// the authored rate.
+        ///
+        /// The authored rate enters as a number and never as live state, so
+        /// calling this with the same intensity any number of times answers the
+        /// same rate. A caller that feeds back the value it last wrote would
+        /// decay the flow to zero, and this shape is why it does not need to
+        /// keep the authored value anywhere.</summary>
+        public static float FlowRate(float authoredRate, float intensity, float floorFraction)
+        {
+            float clamped = math.clamp(intensity, 0f, 1f);
+            float floor = math.clamp(floorFraction, 0f, 1f);
+            return authoredRate * (floor + (1f - floor) * clamped);
+        }
     }
 
     /// <summary>
@@ -135,8 +157,8 @@ namespace PixelEngine.Presentation
     /// path and the streak count scale with the vanishing point distance:
     /// the side and nadir views land the point off screen, and the visible
     /// screen then starts at a larger distance, so a fixed path would put
-    /// every visible pixel past the far fade. The look parameters — flow
-    /// rate, bands, color — are authored on the material, and
+    /// every visible pixel past the far fade. The look parameters — the full
+    /// flow rate, bands, color — are authored on the material, and
     /// the per-pose values write onto a play-mode clone of it, so the
     /// authored asset never carries the runtime answer. Unity 6.6's
     /// CanvasRenderer has no MaterialPropertyBlock path, so the clone is the
@@ -178,16 +200,26 @@ namespace PixelEngine.Presentation
         [SerializeField, Min(1f)] private float streaksPerUv = 10f;
         [Tooltip("How far past the farthest screen corner the ray path runs. A head dies past the corner, so the cycle wrap reads as flow past the border.")]
         [SerializeField, Min(0.02f)] private float pathMargin = 0.15f;
+        [Tooltip("Flow rate at zero intensity, as a fraction of the material's authored Flow Rate. 0 is the linear rule: the streaks stop with the warp. A quarter leaves a quarter speed standing, so a faint layer keeps moving.")]
+        [SerializeField, Range(0f, 1f)] private float flowRateFloor = 0f;
 
         private Material runtimeMaterial;
         private RenderTexture warpTexture;
         private bool missingReported;
+        private float authoredFlowRate;
+        private bool flowRateReadable;
 
         private void Awake()
         {
             if (outputImage != null && warpMaterial != null)
             {
                 runtimeMaterial = new Material(warpMaterial);
+                // The authored full rate is read once, off the authored material,
+                // before any write lands on the clone. The scale multiplies this
+                // number every frame, so a value read back off the clone after a
+                // write would compound and decay the flow toward zero.
+                flowRateReadable = warpMaterial.HasProperty("_FlowRate");
+                authoredFlowRate = flowRateReadable ? warpMaterial.GetFloat("_FlowRate") : 0f;
                 // The canvas draws the RawImage with the UI default
                 // material, which takes the warp texture straight; the warp
                 // shader rides only the blit into the texture.
@@ -290,6 +322,14 @@ namespace PixelEngine.Presentation
             runtimeMaterial.SetFloat("_RayPath", path);
             runtimeMaterial.SetFloat("_StreakDensity", streaks);
             runtimeMaterial.SetFloat("_Intensity", math.clamp(intensity, 0f, 1f));
+            // The streak speed reads the intensity: the authored Flow Rate is the
+            // rate at full warp, and the same number drives brightness, so the
+            // layer's speed and its strength move together.
+            if (flowRateReadable)
+            {
+                runtimeMaterial.SetFloat("_FlowRate",
+                    WarpFlowMath.FlowRate(authoredFlowRate, intensity, flowRateFloor));
+            }
             runtimeMaterial.SetVector("_GridCell", new Vector4(gridCell.x, gridCell.y, 0f, 0f));
         }
     }
