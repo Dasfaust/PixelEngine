@@ -266,6 +266,10 @@ namespace PixelEngine.Presentation
 
         private void OnDestroy()
         {
+            // A destroyed rig leaves its last globals standing, and a standing burn intensity would keep the
+            // surface hot with no warp running. Zero the intensity, and leave the clock and the direction: they
+            // answer nothing while the intensity reads zero.
+            Shader.SetGlobalFloat(WarpBurnShared.IntensityId, 0f);
             if (runtimeMaterial != null)
             {
                 Destroy(runtimeMaterial);
@@ -329,6 +333,16 @@ namespace PixelEngine.Presentation
 
         public void SetFlow(float3 viewTravelDir, float intensity)
         {
+            SetFlow(viewTravelDir, Vector3.zero, intensity);
+        }
+
+        /// <summary>Flow field plus the shared burn seam. <paramref name="worldTravelDir"/> is the travel
+        /// direction in world space, which is the direction a burn faces. The rig owns the warp clock and the
+        /// intensity, so it publishes them as shader globals and every lit material reads them without a
+        /// per-material write. A zero direction publishes no burn travel, and a burn shader that reads
+        /// <c>_WarpTravelWS</c> answers zero on it, so the two-argument call leaves the burn dark.</summary>
+        public void SetFlow(float3 viewTravelDir, float3 worldTravelDir, float intensity)
+        {
             if (outputImage == null || runtimeMaterial == null)
             {
                 if (!missingReported)
@@ -379,6 +393,16 @@ namespace PixelEngine.Presentation
             }
             runtimeMaterial.SetFloat("_FlowPhase", flowPhase);
             runtimeMaterial.SetVector("_GridCell", new Vector4(gridCell.x, gridCell.y, 0f, 0f));
+            // The shared burn seam: the warp intensity, the warp clock, and the travel direction live as
+            // globals, so a surface shader and a plume shader read the same numbers the streak layer runs on.
+            // The warp layer's own _Intensity stays a per-material write and never collides with these names.
+            Shader.SetGlobalFloat(WarpBurnShared.IntensityId, math.clamp(intensity, 0f, 1f));
+            Shader.SetGlobalFloat(WarpBurnShared.FlowPhaseId, flowPhase);
+            if (math.dot(worldTravelDir, worldTravelDir) > 0f)
+            {
+                var travel = math.normalize(worldTravelDir);
+                Shader.SetGlobalVector(WarpBurnShared.TravelId, new Vector4(travel.x, travel.y, travel.z, 0f));
+            }
         }
     }
 }
