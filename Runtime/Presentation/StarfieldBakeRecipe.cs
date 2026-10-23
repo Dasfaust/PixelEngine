@@ -1,3 +1,4 @@
+using System;
 using UnityEngine;
 using Unity.Mathematics;
 
@@ -22,7 +23,14 @@ namespace PixelEngine.Presentation
     /// <see cref="WriteToMaterial"/> writes one pass's numbers onto a material, together with
     /// <c>_FieldDims</c>: the bake target size, which is also the period every lattice inside the
     /// field wraps at.
+    ///
+    /// The struct is <c>[Serializable]</c> so a MonoBehaviour can carry one as an Inspector field. The
+    /// bake driver does: an authored override holds the numbers a person tuned, and Unity writes the
+    /// fields into the scene only when the type carries the attribute. Without it a
+    /// <c>[SerializeField]</c> field of this type is ignored, the Inspector shows nothing, and the
+    /// override reads the struct's default values in play mode.
     /// </summary>
+    [Serializable]
     public struct StarfieldBakeRecipe
     {
         public int Seed;
@@ -99,8 +107,19 @@ namespace PixelEngine.Presentation
         /// convert to.</summary>
         public static StarfieldBakeRecipe CreateStrip(int seed, int cellHeight)
         {
+            return CreateStrip(seed, cellHeight, StarfieldBakeColorRanges.FromRules());
+        }
+
+        /// <summary>The yaw-strip recipe for a seed, drawing its colors inside an authored family. The
+        /// layout numbers — the nebula's angle, offset, width, scale and warp, the band counts, the star
+        /// lattice, the exposure — read the same ranges the rules table names, so an authored color family
+        /// moves the sky and leaves the sky's shape where the seed put it. The draw order is unchanged, so
+        /// one seed keeps the same layout under any family.</summary>
+        public static StarfieldBakeRecipe CreateStrip(int seed, int cellHeight,
+            in StarfieldBakeColorRanges ranges)
+        {
             var stream = new SeedStream(StarfieldBakeRules.ClampSeed(seed));
-            var recipe = CreateBase(seed, cellHeight, ref stream);
+            var recipe = CreateBase(seed, cellHeight, ref stream, ranges);
             recipe.StarStrength = 1f;
             return recipe;
         }
@@ -110,8 +129,17 @@ namespace PixelEngine.Presentation
         /// gives one strip and one nadir picture that share their sky.</summary>
         public static StarfieldBakeRecipe CreateNadir(int seed, int cellHeight)
         {
+            return CreateNadir(seed, cellHeight, StarfieldBakeColorRanges.FromRules());
+        }
+
+        /// <summary>The nadir-cell recipe for a seed, drawing its colors inside an authored family. Reads
+        /// the seed in the same draw order as <see cref="CreateStrip(int,int,StarfieldBakeColorRanges)"/>,
+        /// so the strip and the nadir view share one sky under the same family.</summary>
+        public static StarfieldBakeRecipe CreateNadir(int seed, int cellHeight,
+            in StarfieldBakeColorRanges ranges)
+        {
             var stream = new SeedStream(StarfieldBakeRules.ClampSeed(seed));
-            var recipe = CreateBase(seed, cellHeight, ref stream);
+            var recipe = CreateBase(seed, cellHeight, ref stream, ranges);
 
             recipe.StarStrength = StarfieldBakeRules.NadirStarStrength;
             recipe.NebulaWidthPixels *= StarfieldBakeRules.NadirWidthScale;
@@ -133,7 +161,8 @@ namespace PixelEngine.Presentation
         /// <summary>Draw order for one seed. Both recipes read this order, so the strip and the
         /// nadir cell share their sky, and the recipe a seed names never depends on which factory
         /// ran first.</summary>
-        static StarfieldBakeRecipe CreateBase(int seed, int cellHeight, ref SeedStream stream)
+        static StarfieldBakeRecipe CreateBase(int seed, int cellHeight, ref SeedStream stream,
+            in StarfieldBakeColorRanges ranges)
         {
             int height = math.max(cellHeight, 1);
             var recipe = new StarfieldBakeRecipe
@@ -142,12 +171,12 @@ namespace PixelEngine.Presentation
                 CellHeight = height
             };
 
-            float baseHue = stream.Range(StarfieldBakeRules.DeepHueMin, StarfieldBakeRules.DeepHueMax);
-            float saturation = stream.Range(StarfieldBakeRules.DeepSaturationMin, StarfieldBakeRules.DeepSaturationMax);
+            float baseHue = stream.Range(ranges.DeepHueMin, ranges.DeepHueMax);
+            float saturation = stream.Range(ranges.DeepSaturationMin, ranges.DeepSaturationMax);
             recipe.DeepTop = Color.HSVToRGB(baseHue, saturation,
-                stream.Range(StarfieldBakeRules.DeepTopValueMin, StarfieldBakeRules.DeepTopValueMax));
+                stream.Range(ranges.DeepTopValueMin, ranges.DeepTopValueMax));
             recipe.DeepBottom = Color.HSVToRGB(baseHue, saturation * StarfieldBakeRules.DeepBottomSaturationScale,
-                stream.Range(StarfieldBakeRules.DeepBottomValueMin, StarfieldBakeRules.DeepBottomValueMax));
+                stream.Range(ranges.DeepBottomValueMin, ranges.DeepBottomValueMax));
             recipe.GradientBands = stream.IntRange(StarfieldBakeRules.GradientBandsMin, StarfieldBakeRules.GradientBandsMax);
 
             recipe.NebulaAngleDegrees = stream.Range(StarfieldBakeRules.NebulaAngleMin, StarfieldBakeRules.NebulaAngleMax);
@@ -164,12 +193,12 @@ namespace PixelEngine.Presentation
             recipe.GlowWidthBands = stream.Range(StarfieldBakeRules.GlowWidthMin, StarfieldBakeRules.GlowWidthMax);
             recipe.GlowCover = stream.Range(StarfieldBakeRules.GlowCoverMin, StarfieldBakeRules.GlowCoverMax);
 
-            float nebulaHue = stream.Range(StarfieldBakeRules.NebulaHueMin, StarfieldBakeRules.NebulaHueMax) + baseHue;
+            float nebulaHue = stream.Range(ranges.NebulaHueOffsetMin, ranges.NebulaHueOffsetMax) + baseHue;
             nebulaHue = nebulaHue - math.floor(nebulaHue);
-            float nebulaSaturation = stream.Range(StarfieldBakeRules.NebulaSaturationMin, StarfieldBakeRules.NebulaSaturationMax);
-            float edgeValue = stream.Range(StarfieldBakeRules.NebulaEdgeValueMin, StarfieldBakeRules.NebulaEdgeValueMax);
-            float midValue = edgeValue + stream.Range(StarfieldBakeRules.NebulaStepMin, StarfieldBakeRules.NebulaStepMax);
-            float coreValue = midValue + stream.Range(StarfieldBakeRules.NebulaStepMin, StarfieldBakeRules.NebulaStepMax);
+            float nebulaSaturation = stream.Range(ranges.NebulaSaturationMin, ranges.NebulaSaturationMax);
+            float edgeValue = stream.Range(ranges.NebulaEdgeValueMin, ranges.NebulaEdgeValueMax);
+            float midValue = edgeValue + stream.Range(ranges.NebulaStepMin, ranges.NebulaStepMax);
+            float coreValue = midValue + stream.Range(ranges.NebulaStepMin, ranges.NebulaStepMax);
             recipe.NebulaEdge = Color.HSVToRGB(nebulaHue, nebulaSaturation, edgeValue);
             recipe.NebulaMid = Color.HSVToRGB(nebulaHue, nebulaSaturation, midValue);
             recipe.NebulaCore = Color.HSVToRGB(nebulaHue, nebulaSaturation, coreValue);
@@ -182,11 +211,11 @@ namespace PixelEngine.Presentation
             recipe.StarSizeSpread = stream.Range(StarfieldBakeRules.StarSizeSpreadMin, StarfieldBakeRules.StarSizeSpreadMax);
             recipe.StarBands = stream.IntRange(StarfieldBakeRules.StarBandsMin, StarfieldBakeRules.StarBandsMax);
             recipe.StarCool = Color.HSVToRGB(
-                stream.Range(StarfieldBakeRules.StarCoolHueMin, StarfieldBakeRules.StarCoolHueMax),
-                stream.Range(StarfieldBakeRules.StarCoolSaturationMin, StarfieldBakeRules.StarCoolSaturationMax), 1f);
+                stream.Range(ranges.StarCoolHueMin, ranges.StarCoolHueMax),
+                stream.Range(ranges.StarCoolSaturationMin, ranges.StarCoolSaturationMax), 1f);
             recipe.StarWarm = Color.HSVToRGB(
-                stream.Range(StarfieldBakeRules.StarWarmHueMin, StarfieldBakeRules.StarWarmHueMax),
-                stream.Range(StarfieldBakeRules.StarWarmSaturationMin, StarfieldBakeRules.StarWarmSaturationMax), 1f);
+                stream.Range(ranges.StarWarmHueMin, ranges.StarWarmHueMax),
+                stream.Range(ranges.StarWarmSaturationMin, ranges.StarWarmSaturationMax), 1f);
 
             recipe.Exposure = stream.Range(StarfieldBakeRules.ExposureMin, StarfieldBakeRules.ExposureMax);
             recipe.PaletteBands = stream.Range(0f, 1f) < StarfieldBakeRules.PaletteChance
@@ -200,7 +229,11 @@ namespace PixelEngine.Presentation
         public void WriteToMaterial(Material material, int2 fieldDims)
         {
             material.SetVector(FieldDimsId, new Vector4(fieldDims.x, fieldDims.y, 0f, 0f));
-            material.SetFloat(SeedId, Seed);
+            // The seed crosses as a whole number. The bake shader reads it in lattice arithmetic and as
+            // the salt of an integer hash, and a float carries 24 bits of mantissa: a seed past 16.7
+            // million, and any seed multiplied by a lattice index inside the shader, loses its fine bits
+            // there. The seed range tops at 999999, so the integer form carries it exactly.
+            material.SetInt(SeedId, Seed);
             material.SetColor(DeepTopId, DeepTop);
             material.SetColor(DeepBottomId, DeepBottom);
             material.SetFloat(GradientBandsId, GradientBands);
@@ -233,6 +266,71 @@ namespace PixelEngine.Presentation
     }
 
     /// <summary>
+    /// <summary>
+    /// The twelve color draws a seed makes, each as a min and a max the draw runs inside. A caller
+    /// authors these to state a color family — a teal sky, a red nebula, warm stars — and every seed
+    /// keeps drawing its own picture inside that family. The seed's draw order is fixed, so the layout
+    /// numbers a seed names stay the same when only the color ranges move.
+    ///
+    /// <see cref="FromRules"/> answers the ranges the rules table ships, so a caller that names nothing
+    /// draws exactly what the table draws today. Hue, saturation, and value all run 0 to 1, the same
+    /// order <c>Color.HSVToRGB</c> reads. The nebula range is an offset added to the deep-space base
+    /// hue, so a nebula stays in the neighborhood of its sky the way the rules table keeps it.
+    /// </summary>
+    [Serializable]
+    public struct StarfieldBakeColorRanges
+    {
+        public float DeepHueMin, DeepHueMax;
+        public float DeepSaturationMin, DeepSaturationMax;
+        public float DeepTopValueMin, DeepTopValueMax;
+        public float DeepBottomValueMin, DeepBottomValueMax;
+
+        public float NebulaHueOffsetMin, NebulaHueOffsetMax;
+        public float NebulaSaturationMin, NebulaSaturationMax;
+        public float NebulaEdgeValueMin, NebulaEdgeValueMax;
+        public float NebulaStepMin, NebulaStepMax;
+
+        public float StarCoolHueMin, StarCoolHueMax;
+        public float StarCoolSaturationMin, StarCoolSaturationMax;
+        public float StarWarmHueMin, StarWarmHueMax;
+        public float StarWarmSaturationMin, StarWarmSaturationMax;
+
+        /// <summary>The ranges the rules table ships. A caller that passes these answers the bake the
+        /// rules table produces, field for field.</summary>
+        public static StarfieldBakeColorRanges FromRules()
+        {
+            return new StarfieldBakeColorRanges
+            {
+                DeepHueMin = StarfieldBakeRules.DeepHueMin,
+                DeepHueMax = StarfieldBakeRules.DeepHueMax,
+                DeepSaturationMin = StarfieldBakeRules.DeepSaturationMin,
+                DeepSaturationMax = StarfieldBakeRules.DeepSaturationMax,
+                DeepTopValueMin = StarfieldBakeRules.DeepTopValueMin,
+                DeepTopValueMax = StarfieldBakeRules.DeepTopValueMax,
+                DeepBottomValueMin = StarfieldBakeRules.DeepBottomValueMin,
+                DeepBottomValueMax = StarfieldBakeRules.DeepBottomValueMax,
+
+                NebulaHueOffsetMin = StarfieldBakeRules.NebulaHueMin,
+                NebulaHueOffsetMax = StarfieldBakeRules.NebulaHueMax,
+                NebulaSaturationMin = StarfieldBakeRules.NebulaSaturationMin,
+                NebulaSaturationMax = StarfieldBakeRules.NebulaSaturationMax,
+                NebulaEdgeValueMin = StarfieldBakeRules.NebulaEdgeValueMin,
+                NebulaEdgeValueMax = StarfieldBakeRules.NebulaEdgeValueMax,
+                NebulaStepMin = StarfieldBakeRules.NebulaStepMin,
+                NebulaStepMax = StarfieldBakeRules.NebulaStepMax,
+
+                StarCoolHueMin = StarfieldBakeRules.StarCoolHueMin,
+                StarCoolHueMax = StarfieldBakeRules.StarCoolHueMax,
+                StarCoolSaturationMin = StarfieldBakeRules.StarCoolSaturationMin,
+                StarCoolSaturationMax = StarfieldBakeRules.StarCoolSaturationMax,
+                StarWarmHueMin = StarfieldBakeRules.StarWarmHueMin,
+                StarWarmHueMax = StarfieldBakeRules.StarWarmHueMax,
+                StarWarmSaturationMin = StarfieldBakeRules.StarWarmSaturationMin,
+                StarWarmSaturationMax = StarfieldBakeRules.StarWarmSaturationMax
+            };
+        }
+    }
+
     /// The authored ranges the seed-to-parameter table draws inside, and the constants the nadir
     /// variant applies. Every range here names a range the bake shader declares for the same
     /// property, so a derived value never lands on a number the shader does not declare.
