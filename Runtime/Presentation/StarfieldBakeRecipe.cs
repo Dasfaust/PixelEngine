@@ -229,7 +229,11 @@ namespace PixelEngine.Presentation
         public void WriteToMaterial(Material material, int2 fieldDims)
         {
             material.SetVector(FieldDimsId, new Vector4(fieldDims.x, fieldDims.y, 0f, 0f));
-            material.SetFloat(SeedId, Seed);
+            // The seed crosses as a whole number. The bake shader reads it in lattice arithmetic and as
+            // the salt of an integer hash, and a float carries 24 bits of mantissa: a seed past 16.7
+            // million, and any seed multiplied by a lattice index inside the shader, loses its fine bits
+            // there. The seed range tops at 999999, so the integer form carries it exactly.
+            material.SetInt(SeedId, Seed);
             material.SetColor(DeepTopId, DeepTop);
             material.SetColor(DeepBottomId, DeepBottom);
             material.SetFloat(GradientBandsId, GradientBands);
