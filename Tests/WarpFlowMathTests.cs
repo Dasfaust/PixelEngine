@@ -373,5 +373,87 @@ namespace PixelEngine.Tests
             Assert.AreEqual(0.075f, third, 1e-6f, "a fed-back value scales again, which is the compounding shape to avoid");
             Assert.AreEqual(0.0375f, fourth, 1e-6f, "the fed-back chain walks the flow toward zero");
         }
+
+        // The flow clock. The shader reads an accumulated clock, so the streak
+        // direction cannot depend on how the rate is changing.
+        [Test]
+        public void FlowStep_RateTimesElapsed_WithTheElapsedCapped()
+        {
+            Assert.AreEqual(0.008f, WarpFlowMath.FlowStep(0.8f, 0.01f, 0.1f), 1e-6f, "one frame at full rate");
+            Assert.AreEqual(0.04f, WarpFlowMath.FlowStep(0.4f, 0.1f, 0.1f), 1e-6f, "half rate");
+            Assert.AreEqual(0.08f, WarpFlowMath.FlowStep(0.8f, 3f, 0.1f), 1e-6f, "a stalled frame pays the cap");
+            Assert.AreEqual(0f, WarpFlowMath.FlowStep(0.8f, -1f, 0.1f), 1e-6f, "a repeated clock advances nothing");
+            Assert.AreEqual(0f, WarpFlowMath.FlowStep(-1f, 0.01f, 0.1f), 1e-6f, "a negative rate advances nothing");
+        }
+
+        [Test]
+        public void AdvancePhase_AccumulatesTheRateAndStaysInUnitRange()
+        {
+            float phase = 0f;
+            for (int i = 0; i < 200; i++)
+            {
+                phase = WarpFlowMath.AdvancePhase(phase, 0.8f, 0.01f, 0.1f);
+            }
+            // 200 frames of 0.01 s at rate 0.8 is 1.6 cycles, so the clock lands on 0.6.
+            Assert.AreEqual(0.6f, phase, 1e-4f, "accumulated cycles");
+            Assert.GreaterOrEqual(phase, 0f, "lower bound");
+            Assert.Less(phase, 1f, "upper bound");
+        }
+
+        [Test]
+        public void AdvancePhase_SteppingAndOneBigStep_AgreeModOneCycle()
+        {
+            float stepped = 0f;
+            for (int i = 0; i < 37; i++)
+            {
+                stepped = WarpFlowMath.AdvancePhase(stepped, 0.5f, 1f / 60f, 0.1f);
+            }
+            // The cap must sit above the whole span, or the big step pays its cap and the
+            // two paths measure different amounts of time.
+            float oneBig = WarpFlowMath.AdvancePhase(0f, 0.5f, 37f / 60f, 1f);
+            Assert.AreEqual(37f / 60f * 0.5f, oneBig, 1e-4f, "the big step measured the span");
+            Assert.AreEqual(oneBig, stepped, 1e-4f, "the clock is the integral of the rate");
+        }
+
+        [Test]
+        public void AdvancePhase_FallingRate_NeverTurnsTheClockBack()
+        {
+            // The shape a warp exit produces: the rate drops frame after frame while the
+            // wall clock keeps growing. A clock built from rate x wall time moves back
+            // here, and the streaks run in reverse. The accumulated clock only ever moves
+            // forward, at the rate of the frame.
+            float phase = 0.4f;
+            float previous = phase;
+            float[] rates = { 0.8f, 0.6f, 0.4f, 0.2f, 0.1f, 0f };
+            foreach (float rate in rates)
+            {
+                for (int i = 0; i < 10; i++)
+                {
+                    phase = WarpFlowMath.AdvancePhase(phase, rate, 1f / 60f, 0.1f);
+                    float forward = phase - previous;
+                    if (forward < -0.5f) { forward += 1f; }   // the wrap reads as forward motion
+                    Assert.GreaterOrEqual(forward, -1e-6f, $"falling rate {rate} frame {i} turned the clock");
+                    previous = phase;
+                }
+            }
+        }
+
+        [Test]
+        public void AdvancePhase_ZeroRate_HoldsTheClockInPlace()
+        {
+            Assert.AreEqual(0.35f, WarpFlowMath.AdvancePhase(0.35f, 0f, 1f / 60f, 0.1f), 1e-6f, "stopped flow");
+            Assert.AreEqual(0.35f, WarpFlowMath.AdvancePhase(0.35f, 0.8f, 0f, 0.1f), 1e-6f, "no elapsed time");
+        }
+
+        [Test]
+        public void AdvancePhase_RepeatedFrameStamp_AdvancesNothing()
+        {
+            // The rig stamps the frame, so a caller that calls SetFlow twice in one frame
+            // hands the same elapsed time and the clock stands where it was.
+            float first = WarpFlowMath.AdvancePhase(0.2f, 0.8f, 0f, 0.1f);
+            float second = WarpFlowMath.AdvancePhase(first, 0.8f, 0f, 0.1f);
+            Assert.AreEqual(0.2f, first, 1e-6f, "same stamp");
+            Assert.AreEqual(first, second, 1e-6f, "repeat call");
+        }
     }
 }
