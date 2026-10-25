@@ -141,30 +141,59 @@ namespace PixelEngine.Presentation
             return authoredRate * (floor + (1f - floor) * clamped);
         }
 
+        /// <summary>The distance from the vanishing point to the screen center, in
+        /// screen widths. <c>VanishingPoint</c> answers in unit-square UV, so 0.5,
+        /// 0.5 is the center and the answer is in screen widths. Zero means the
+        /// point sits at the center: the whole screen is at the point's own speed,
+        /// and the screen reads at the lowest speed the pattern has.</summary>
+        public static float ScreenSpread(float2 vanishPoint)
+        {
+            return math.length(vanishPoint - new float2(0.5f, 0.5f));
+        }
+
+        /// <summary>The number the screen-center speed divides by: the ray path, plus
+        /// the screen spread scaled by the acceleration span.
+        ///
+        /// The shader multiplies the per-point streak speed by
+        /// <c>exp(accel * distance / path)</c>, so a pixel on the screen center runs
+        /// at rate times the path-to-center factor. At the authored acceleration the
+        /// factor at the center is this denominator times <c>accel</c> over the
+        /// acceleration span, so one denominator per pose carries the center speed.
+        ///
+        /// Spread 0, a path of 0.01, and acceleration 0 each answer the plain path,
+        /// which is the value the rule had before the center term existed.</summary>
+        public static float ScreenSpeedDenominator(float2 vanishPoint, float path, float accelExponent)
+        {
+            float span = math.exp(math.max(accelExponent, 0f)) - 1f;
+            return math.max(path, 0.01f) + ScreenSpread(vanishPoint) * span;
+        }
+
         /// <summary>The flow rate one pose writes: the intensity-scaled rate, slowed
-        /// when that pose's ray path runs longer than the speed reference.
+        /// when that pose's screen sits farther along the acceleration ramp than the
+        /// speed reference does.
         ///
-        /// The shader advances the streak pattern by one ray path per cycle, and the
-        /// cycle is one over the flow rate, so the on-screen sweep is path times
-        /// rate. The ray path grows with the vanishing point's distance off screen,
-        /// because the path must reach the farthest screen corner for the far fade
-        /// to cover the view. Left alone, that coverage rule sets the speed too: a
-        /// side view, whose point sits two screen widths off center, sweeps about
-        /// three times as fast as a head-on view at the same authored rate.
+        /// The streak spacing is fixed on the screen, so a pixel's speed is the
+        /// pattern's sweep, and the shader ramps that speed with distance from the
+        /// vanishing point. A view whose screen lies far from its point therefore
+        /// reads faster than a view whose screen sits on the point: the side view
+        /// sweeps its screen from 1.5 to 2.5 screen widths out, where a head-on view
+        /// sweeps from 0 to 0.85, and the same authored rate reads about twice as
+        /// fast at the side view's screen center.
         ///
-        /// The reference names the path length the authored rate is tuned at. A pose
-        /// whose path runs longer writes rate x reference / path, which lands the
-        /// sweep at the same screen speed and lengthens that pose's cycle. A pose
-        /// whose path runs shorter keeps the authored rate, so the authored Flow
-        /// Rate stays the fastest the layer runs and the shortest cycle it has.
+        /// The reference names the view the authored rate is tuned at. A pose whose
+        /// denominator runs larger writes rate x reference denominator / denominator,
+        /// which lands its screen-center speed on the reference view's center speed
+        /// and lengthens that pose's cycle. A pose with a smaller denominator keeps
+        /// the authored rate, so the authored Flow Rate stays the fastest the layer
+        /// runs and the shortest cycle it has.
         ///
-        /// The scaling divides the rate and never the path: the path keeps its full
-        /// length, so the far fade keeps covering the corner it was written for.</summary>
+        /// The scaling divides the rate and never the ray path: the path keeps its
+        /// full length, so the far fade keeps covering the corner it was written for.</summary>
         public static float SpeedRate(float authoredRate, float intensity, float floorFraction,
-            float referencePath, float path)
+            float referenceDenominator, float denominator)
         {
             float rate = FlowRate(authoredRate, intensity, floorFraction);
-            float shrink = referencePath / math.max(path, 0.01f);
+            float shrink = referenceDenominator / math.max(denominator, 0.01f);
             return rate * math.min(shrink, 1f);
         }
 
@@ -216,11 +245,14 @@ namespace PixelEngine.Presentation
     /// path and the streak count scale with the vanishing point distance:
     /// the side and nadir views land the point off screen, and the visible
     /// screen then starts at a larger distance, so a fixed path would put
-    /// every visible pixel past the far fade. That same growth sets the sweep
-    /// speed, because the pattern advances one ray path per cycle, so the rate
-    /// scales down by the ratio past the component's speed reference: the streaks
-    /// sweep the screen at one speed at every pose, and a long-path pose lengthens
-    /// its cycle instead of running faster. The look parameters — the full
+    /// every visible pixel past the far fade. The streak speed reads the same
+    /// geometry twice over: the pattern advances one ray path per cycle, and the
+    /// shader ramps pixel speed with the distance from the vanishing point. So a
+    /// pose whose screen sits far from its point reads faster at the same rate.
+    /// The rate scales down by the denominator ratio past the component's speed
+    /// reference: the streaks sweep the screen center at one speed at every pose,
+    /// and a pose whose screen lies farther out lengthens its cycle instead of
+    /// running faster. The look parameters — the full
     /// flow rate, bands, color — are authored on the material, and
     /// the per-pose values write onto a play-mode clone of it, so the
     /// authored asset never carries the runtime answer. Unity 6.6's
@@ -267,14 +299,16 @@ namespace PixelEngine.Presentation
         [SerializeField, Range(0f, 1f)] private float flowRateFloor = 0f;
         [Tooltip("The largest elapsed time one frame may add to the flow clock, in seconds. A stalled frame, a tab-out, or a paused debugger reports a large elapsed time; the cap makes that a skip and not a jump.")]
         [SerializeField, Min(0.001f)] private float flowStepCapSeconds = 0.1f;
-        [Tooltip("The ray path the authored Flow Rate sweeps at, in UV. The streak pattern advances one ray path per cycle, so a pose whose path runs longer than this writes a slower rate and keeps the same screen speed, and its cycle lengthens. A pose with a shorter path keeps the authored rate, so the authored Flow Rate is the fastest the layer runs. Set it to the path of the view the look was tuned at: the head-on view at the authored pitch.")]
-        [SerializeField, Min(0.01f)] private float speedReferencePath = 0.99f;
+        [Tooltip("The view the material's authored Flow Rate is tuned at, as a travel direction in view space: X along screen right, Y along screen up, Z against the gaze. (0, 0, -1) is travel straight ahead of a level gaze; (0, sin p, -cos p) is travel ahead with the gaze pitched down p. The rig works out that view's screen speed from it, so no path number is authored here. A pose whose screen sits farther along the acceleration ramp writes a slower rate, lands its screen-center speed on this view's center speed, and lengthens its cycle. A pose with a nearer screen keeps the authored rate, so the authored Flow Rate is the fastest the layer runs. The default is the head-on view pitched down 30 degrees.")]
+        [SerializeField] private Vector3 speedReferenceViewTravel = new Vector3(0f, 0.5f, -0.866f);
 
         private Material runtimeMaterial;
         private RenderTexture warpTexture;
         private bool missingReported;
         private float authoredFlowRate;
         private bool flowRateReadable;
+        private float authoredAccel;
+        private bool accelReadable;
         private float flowPhase;
         private double lastPhaseTime = -1;
 
@@ -289,6 +323,12 @@ namespace PixelEngine.Presentation
                 // write would compound and decay the flow toward zero.
                 flowRateReadable = warpMaterial.HasProperty("_FlowRate");
                 authoredFlowRate = flowRateReadable ? warpMaterial.GetFloat("_FlowRate") : 0f;
+                // The acceleration exponent sets the span of the shader's speed ramp,
+                // and the pose rule divides by that span, so a material that ramps
+                // harder spreads the pose-to-pose rate ratio wider. A material with no
+                // _Accel answers 0, and the pose rule scales by the ray path alone.
+                accelReadable = warpMaterial.HasProperty("_Accel");
+                authoredAccel = accelReadable ? warpMaterial.GetFloat("_Accel") : 0f;
                 // The canvas draws the RawImage with the UI default
                 // material, which takes the warp texture straight; the warp
                 // shader rides only the blit into the texture.
@@ -395,11 +435,21 @@ namespace PixelEngine.Presentation
             // rate at full warp, and the same number drives brightness, so the
             // layer's speed and its strength move together. _FlowRate carries the
             // rate the rig is running at, which is the number a live read checks.
-            // The pose rule sits on the same number: a pose whose ray path runs
-            // longer than the speed reference writes a proportionally slower rate,
-            // so the streaks sweep the screen at one speed at every pose and the
-            // cycle lengthens instead of the speed growing.
-            float rate = WarpFlowMath.SpeedRate(authoredFlowRate, intensity, flowRateFloor, speedReferencePath, path);
+            // The pose rule sits on the same number: a pose whose screen sits farther
+            // along the shader's speed ramp than the reference view's does writes a
+            // proportionally slower rate, so the streaks sweep the screen center at one
+            // speed at every pose and the cycle lengthens instead of the speed growing.
+            // The reference is the authored view, read through the same three numbers.
+            float3 refTravel = speedReferenceViewTravel;
+            if (math.lengthsq(refTravel) < 1e-6f)
+            {
+                refTravel = new float3(0f, 0f, -1f);
+            }
+            float2 refPoint = WarpFlowMath.VanishingPoint(refTravel, focal, minAxial);
+            float referenceDenominator = WarpFlowMath.ScreenSpeedDenominator(
+                refPoint, WarpFlowMath.RayPath(refPoint, pathMargin), authoredAccel);
+            float denominator = WarpFlowMath.ScreenSpeedDenominator(vanishPoint, path, authoredAccel);
+            float rate = WarpFlowMath.SpeedRate(authoredFlowRate, intensity, flowRateFloor, referenceDenominator, denominator);
             if (flowRateReadable)
             {
                 runtimeMaterial.SetFloat("_FlowRate", rate);

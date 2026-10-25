@@ -374,90 +374,131 @@ namespace PixelEngine.Tests
             Assert.AreEqual(0.0375f, fourth, 1e-6f, "the fed-back chain walks the flow toward zero");
         }
 
-        // The pose rule on the rate. The shader advances the streak pattern by one ray
-        // path per cycle, and the cycle is one over the rate, so the screen sweep is
-        // path x rate. The path grows with the vanishing point's distance off screen,
-        // because it must reach the farthest screen corner, so a side view runs a path
-        // about 2.7 times the head-on path. These tests state that the rate carries
-        // that growth and the sweep does not.
+        // The pose rule on the rate. The shader ramps the streak speed with the
+        // distance from the vanishing point, so a view whose screen sits far from its
+        // point reads faster at the same rate: the side view sweeps from 1.5 to 2.5
+        // screen widths out, where a head-on view sweeps from 0 to 0.85. These tests
+        // state that the rate carries that geometry and the screen-center speed does
+        // not.
         [Test]
-        public void SpeedRate_MatchesTheIntensityRate_WhenThePathEqualsTheReference()
+        public void ScreenSpread_ReportsTheDistanceFromTheScreenCenter_InScreenWidths()
         {
-            float path = 0.989f;
+            Assert.AreEqual(0f, WarpFlowMath.ScreenSpread(new float2(0.5f, 0.5f)), 1e-6f, "the screen center sits at zero spread");
+            Assert.AreEqual(0.5f, WarpFlowMath.ScreenSpread(new float2(1.0f, 0.5f)), 1e-6f, "the edge midpoint sits half a screen width out");
+            Assert.AreEqual(0.7071068f, WarpFlowMath.ScreenSpread(new float2(1f, 1f)), 1e-6f, "the corner sits root-two halves out");
+            Assert.AreEqual(2.0f, WarpFlowMath.ScreenSpread(new float2(-1.5f, 0.5f)), 1e-6f, "the side view's point sits two screen widths off center");
+        }
+
+        [Test]
+        public void ScreenSpeedDenominator_AddsTheSpreadOverTheRampSpan_ToThePath()
+        {
+            // The side view: path 2.70, the point two screen widths off center, the
+            // authored acceleration 1, so the span is e - 1 = 1.71828.
+            Assert.AreEqual(2.700f + 2.0f * (math.E - 1.0),
+                WarpFlowMath.ScreenSpeedDenominator(new float2(-1.5f, 0.5f), 2.700f, 1f), 1e-5f,
+                "the spread term rides the ramp span");
+            Assert.AreEqual(0.989f + 0.173f * (math.E - 1.0),
+                WarpFlowMath.ScreenSpeedDenominator(new float2(0.5f, 0.673f), 0.989f, 1f), 1e-5f,
+                "the head-on view carries its short spread");
+        }
+
+        [Test]
+        public void ScreenSpeedDenominator_FallsToThePath_WhenTheScreenSitsOnThePointOrTheRampIsFlat()
+        {
+            Assert.AreEqual(1.25f, WarpFlowMath.ScreenSpeedDenominator(new float2(0.5f, 0.5f), 1.25f, 1f), 1e-6f,
+                "a point at the screen center adds no spread term");
+            Assert.AreEqual(2.700f, WarpFlowMath.ScreenSpeedDenominator(new float2(-1.5f, 0.5f), 2.700f, 0f), 1e-6f,
+                "a flat ramp leaves the path alone");
+            Assert.AreEqual(0.01f, WarpFlowMath.ScreenSpeedDenominator(new float2(0.5f, 0.5f), 0f, 4f), 1e-6f,
+                "a zero path at the screen center floors at the floor the rate divides by");
+        }
+
+        [Test]
+        public void SpeedRate_MatchesTheIntensityRate_WhenThePoseSitsAtTheReferenceView()
+        {
+            const float reference = 1.2863f;
             for (int i = 0; i <= 5; i++)
             {
                 float intensity = i * 0.2f;
                 Assert.AreEqual(
                     WarpFlowMath.FlowRate(AuthoredRate, intensity, 0.25f),
-                    WarpFlowMath.SpeedRate(AuthoredRate, intensity, 0.25f, path, path),
-                    1e-6f, $"intensity {intensity} at the reference path");
+                    WarpFlowMath.SpeedRate(AuthoredRate, intensity, 0.25f, reference, reference),
+                    1e-6f, $"intensity {intensity} at the reference view");
             }
         }
 
         [Test]
-        public void SpeedRate_ScalesByThePathRatio_WhenThePathRunsLonger()
+        public void SpeedRate_ScalesByTheDenominatorRatio_WhenThePoseSitsFartherOut()
         {
-            const float reference = 0.989f;
-            const float sidePath = 2.700f;
-            float expected = AuthoredRate * reference / sidePath;
-            Assert.AreEqual(expected, WarpFlowMath.SpeedRate(AuthoredRate, 1f, 0f, reference, sidePath), 1e-6f,
+            const float reference = 1.2863f;
+            const float sideDenominator = 6.1366f;
+            float expected = AuthoredRate * reference / sideDenominator;
+            Assert.AreEqual(expected, WarpFlowMath.SpeedRate(AuthoredRate, 1f, 0f, reference, sideDenominator), 1e-6f,
                 "full intensity pays the ratio");
-            Assert.AreEqual(expected * 0.5f, WarpFlowMath.SpeedRate(AuthoredRate, 0.5f, 0f, reference, sidePath), 1e-6f,
+            Assert.AreEqual(expected * 0.5f, WarpFlowMath.SpeedRate(AuthoredRate, 0.5f, 0f, reference, sideDenominator), 1e-6f,
                 "the intensity scale rides the same number");
-            Assert.AreEqual(0.25f * AuthoredRate * reference / sidePath,
-                WarpFlowMath.SpeedRate(AuthoredRate, 0f, 0.25f, reference, sidePath), 1e-6f,
+            Assert.AreEqual(0.25f * AuthoredRate * reference / sideDenominator,
+                WarpFlowMath.SpeedRate(AuthoredRate, 0f, 0.25f, reference, sideDenominator), 1e-6f,
                 "the floor rides the same number");
-            Assert.AreEqual(0f, WarpFlowMath.SpeedRate(AuthoredRate, 0f, 0f, reference, sidePath), 1e-6f,
+            Assert.AreEqual(0f, WarpFlowMath.SpeedRate(AuthoredRate, 0f, 0f, reference, sideDenominator), 1e-6f,
                 "a stopped warp stays stopped at any pose");
         }
 
         [Test]
         public void SpeedRate_NeverRunsAPoseFasterThanTheAuthoredRate()
         {
-            const float reference = 0.989f;
-            foreach (float path in new[] { 0.5f, 0.857f, 0.988f })
+            const float reference = 1.2863f;
+            foreach (float denominator in new[] { 0.5f, 0.857f, 1.2f })
             {
-                Assert.AreEqual(AuthoredRate, WarpFlowMath.SpeedRate(AuthoredRate, 1f, 0f, reference, path), 1e-6f,
-                    $"path {path} shorter than the reference keeps the authored rate");
+                Assert.AreEqual(AuthoredRate, WarpFlowMath.SpeedRate(AuthoredRate, 1f, 0f, reference, denominator), 1e-6f,
+                    $"denominator {denominator} under the reference keeps the authored rate");
             }
-            Assert.LessOrEqual(WarpFlowMath.SpeedRate(AuthoredRate, 2f, 1f, reference, 2.7f), AuthoredRate, "over-range inputs stay under the authored rate");
+            Assert.LessOrEqual(WarpFlowMath.SpeedRate(AuthoredRate, 2f, 1f, reference, 6.1366f), AuthoredRate,
+                "over-range inputs stay under the authored rate");
         }
 
         [Test]
-        public void SpeedRate_HoldsOneScreenSweepAcrossThePoseTable()
+        public void SpeedRate_HoldsOneScreenCenterSpeedAcrossThePoseTable()
         {
-            // The poses the layer runs at, read through the rig's own math.
+            // The center pixel's speed is the rate times the derivative of the pattern
+            // advance at the center: rate x accel x denominator / (e^accel - 1). The
+            // rule divides the rate by the denominator, so that product is one number
+            // for every pose the rule scales, and the cycle takes up the slack.
+            const float accel = 1f;
+            const float span = math.E - 1.0f;
             float margin = 0.15f;
             var poses = new[]
             {
                 new float3(0f, 0f, -1f),                     // gaze along travel, level
-                new float3(0f, 0.5f, -0.8660254f),           // gaze along travel, pitch 30
+                new float3(0f, 0.5f, -0.8660254f),           // gaze along travel, pitch 30 (the reference view)
                 new float3(-0.7071068f, 0.3535534f, -0.6123724f), // yaw 45, pitch 30
                 new float3(-1f, 0f, 0f),                     // side view
                 new float3(1f, 0f, 0f),                      // mirrored side view
                 new float3(0f, 1f, 0f)                       // nadir
             };
-            var paths = new float[poses.Length];
-            for (int i = 0; i < poses.Length; i++)
-            {
-                paths[i] = WarpFlowMath.RayPath(VP(poses[i]), margin);
-            }
-            float reference = WarpFlowMath.RayPath(VP(new float3(0f, 0.5f, -0.8660254f)), margin);
+            float2 refPoint = VP(new float3(0f, 0.5f, -0.8660254f));
+            float referenceDenominator = WarpFlowMath.ScreenSpeedDenominator(refPoint, WarpFlowMath.RayPath(refPoint, margin), accel);
+            float centerSpeed = AuthoredRate * accel * referenceDenominator / span;
 
             for (int i = 0; i < poses.Length; i++)
             {
-                float rate = WarpFlowMath.SpeedRate(AuthoredRate, 1f, 0f, reference, paths[i]);
-                float sweep = paths[i] * rate;
-                float cycle = 1f / rate;
-                if (paths[i] >= reference)
+                float2 vp = VP(poses[i]);
+                float path = WarpFlowMath.RayPath(vp, margin);
+                float denominator = WarpFlowMath.ScreenSpeedDenominator(vp, path, accel);
+                float rate = WarpFlowMath.SpeedRate(AuthoredRate, 1f, 0f, referenceDenominator, denominator);
+                float speed = rate * accel * denominator / span;
+                if (denominator >= referenceDenominator)
                 {
-                    Assert.AreEqual(reference * AuthoredRate, sweep, 1e-4f, $"pose {poses[i]} sweeps the reference distance per second");
-                    Assert.AreEqual(paths[i] / (reference * AuthoredRate), cycle, 1e-2f, $"pose {poses[i]} spends its extra path on the cycle");
+                    Assert.AreEqual(centerSpeed, speed, 1e-4f, $"pose {poses[i]} runs the reference center speed");
+                    Assert.AreEqual(denominator / (AuthoredRate * referenceDenominator), 1f / rate, 1e-2f,
+                        $"pose {poses[i]} spends its extra denominator on the cycle length");
+                    Assert.AreEqual(span / (AuthoredRate * accel * referenceDenominator), 1f / speed, 1e-2f,
+                        $"pose {poses[i]} spends it on the screen cycle too");
                 }
                 else
                 {
                     Assert.AreEqual(AuthoredRate, rate, 1e-6f, $"pose {poses[i]} keeps the authored rate");
-                    Assert.Less(sweep, reference * AuthoredRate + 1e-4f, $"pose {poses[i]} sweeps less, and never more");
+                    Assert.Less(speed, centerSpeed + 1e-4f, $"pose {poses[i]} reads slower at the center, and never faster");
                 }
             }
         }
@@ -466,10 +507,11 @@ namespace PixelEngine.Tests
         public void SpeedRate_ScalesTheRateAndKeepsThePathThatTheFarFadeNeeds()
         {
             // The ray path does two jobs: it reaches the farthest screen corner so the
-            // far fade covers the view, and it sets the cycle length. The rule scales
+            // far fade covers the view, and it carries the cycle length. The rule scales
             // the rate and leaves the path whole, so the coverage rule keeps standing.
             float2 vp = new float2(-1.5f, 0.5f);   // side view
             float path = WarpFlowMath.RayPath(vp, 0.15f);
+            float denominator = WarpFlowMath.ScreenSpeedDenominator(vp, path, 1f);
             float farFadeRate = 3f;
             foreach (int i in new[] { 0, 1, 2, 3 })
             {
@@ -477,7 +519,7 @@ namespace PixelEngine.Tests
                 float fade = math.saturate((path - math.length(vp - corner)) * farFadeRate);
                 Assert.Greater(fade, 0f, $"corner {corner} stays inside the far fade at the scaled rate");
             }
-            Assert.Greater(WarpFlowMath.SpeedRate(AuthoredRate, 1f, 0f, 0.989f, path), 0f, "the pose still runs");
+            Assert.Greater(WarpFlowMath.SpeedRate(AuthoredRate, 1f, 0f, 1.2863f, denominator), 0f, "the pose still runs");
             Assert.AreEqual(path, WarpFlowMath.RayPath(vp, 0.15f), 0f, "the path the fade reads is the path the rate divides by");
         }
 
