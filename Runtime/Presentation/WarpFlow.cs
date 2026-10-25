@@ -119,6 +119,41 @@ namespace PixelEngine.Presentation
             return new int2(math.max(width / s, 1), math.max(height / s, 1));
         }
 
+        /// <summary>The zoom level the layer draws at: the caller's zoom level,
+        /// floored. The field mapping divides by this number, so a level at or
+        /// under the floor would send the field to infinity. The floor is a
+        /// safety rule and not a look: a live viewport never reports a level under 1,
+        /// because the camera clamps its own zoom at 1.</summary>
+        public static float ZoomLevel(float zoomLevel, float floorLevel)
+        {
+            return math.max(zoomLevel, math.max(floorLevel, 0.01f));
+        }
+
+        /// <summary>The field coordinate a screen pixel reads at: the screen UV,
+        /// scaled about the screen center. The viewport convention is the same one the
+        /// subpixel viewport layer maps by, and the pattern carries no parallax: the
+        /// zoom moves no offset, it scales.
+        ///
+        /// The field is authored at zoom 1, so zoom 1 is the identity. At zoom 2 the
+        /// field draws twice as large about the center, and the vanishing point slides
+        /// outward to twice its offset: a narrower view window over a magnified field
+        /// is what a zoom reads as, and the point is part of that field.
+        ///
+        /// The inverse is <see cref="ScreenUv"/>, and the pair round-trips.</summary>
+        public static float2 FieldUv(float2 screenUv, float zoomLevel)
+        {
+            return (screenUv - 0.5f) / ZoomLevel(zoomLevel, 0.01f) + 0.5f;
+        }
+
+        /// <summary>The screen coordinate a field coordinate lands on: the inverse of
+        /// <see cref="FieldUv">. The rig authors the field — the vanishing point, the ray
+        /// path, the fades — in field units, so this is how a field number shows on
+        /// screen: an offset from the center scales by the zoom level.</summary>
+        public static float2 ScreenUv(float2 fieldUv, float zoomLevel)
+        {
+            return (fieldUv - 0.5f) * ZoomLevel(zoomLevel, 0.01f) + 0.5f;
+        }
+
         /// <summary>The flow rate the layer runs at for a given intensity: the
         /// authored full rate scaled by that intensity, so the streak speed
         /// reads the warp strength. The rule is linear: half intensity is half
@@ -139,6 +174,62 @@ namespace PixelEngine.Presentation
             float clamped = math.clamp(intensity, 0f, 1f);
             float floor = math.clamp(floorFraction, 0f, 1f);
             return authoredRate * (floor + (1f - floor) * clamped);
+        }
+
+        /// <summary>The distance from the vanishing point to the screen center, in
+        /// screen widths. <c>VanishingPoint</c> answers in unit-square UV, so 0.5,
+        /// 0.5 is the center and the answer is in screen widths. Zero means the
+        /// point sits at the center: the whole screen is at the point's own speed,
+        /// and the screen reads at the lowest speed the pattern has.</summary>
+        public static float ScreenSpread(float2 vanishPoint)
+        {
+            return math.length(vanishPoint - new float2(0.5f, 0.5f));
+        }
+
+        /// <summary>The number the screen-center speed divides by: the ray path, plus
+        /// the screen spread scaled by the acceleration span.
+        ///
+        /// The shader multiplies the per-point streak speed by
+        /// <c>exp(accel * distance / path)</c>, so a pixel on the screen center runs
+        /// at rate times the path-to-center factor. At the authored acceleration the
+        /// factor at the center is this denominator times <c>accel</c> over the
+        /// acceleration span, so one denominator per pose carries the center speed.
+        ///
+        /// Spread 0, a path of 0.01, and acceleration 0 each answer the plain path,
+        /// which is the value the rule had before the center term existed.</summary>
+        public static float ScreenSpeedDenominator(float2 vanishPoint, float path, float accelExponent)
+        {
+            float span = math.exp(math.max(accelExponent, 0f)) - 1f;
+            return math.max(path, 0.01f) + ScreenSpread(vanishPoint) * span;
+        }
+
+        /// <summary>The flow rate one pose writes: the intensity-scaled rate, slowed
+        /// when that pose's screen sits farther along the acceleration ramp than the
+        /// speed reference does.
+        ///
+        /// The streak spacing is fixed on the screen, so a pixel's speed is the
+        /// pattern's sweep, and the shader ramps that speed with distance from the
+        /// vanishing point. A view whose screen lies far from its point therefore
+        /// reads faster than a view whose screen sits on the point: the side view
+        /// sweeps its screen from 1.5 to 2.5 screen widths out, where a head-on view
+        /// sweeps from 0 to 0.85, and the same authored rate reads about twice as
+        /// fast at the side view's screen center.
+        ///
+        /// The reference names the view the authored rate is tuned at. A pose whose
+        /// denominator runs larger writes rate x reference denominator / denominator,
+        /// which lands its screen-center speed on the reference view's center speed
+        /// and lengthens that pose's cycle. A pose with a smaller denominator keeps
+        /// the authored rate, so the authored Flow Rate stays the fastest the layer
+        /// runs and the shortest cycle it has.
+        ///
+        /// The scaling divides the rate and never the ray path: the path keeps its
+        /// full length, so the far fade keeps covering the corner it was written for.</summary>
+        public static float SpeedRate(float authoredRate, float intensity, float floorFraction,
+            float referenceDenominator, float denominator)
+        {
+            float rate = FlowRate(authoredRate, intensity, floorFraction);
+            float shrink = referenceDenominator / math.max(denominator, 0.01f);
+            return rate * math.min(shrink, 1f);
         }
 
         /// <summary>The flow clock advance one frame buys: the rate times the
@@ -185,11 +276,21 @@ namespace PixelEngine.Presentation
     ///
     /// The caller names the travel direction in view space and an intensity;
     /// the rig answers the vanishing point, the axial sign, the ray count,
-    /// the ray path, the streak count, and the warp-texture grid cell. The
+    /// the ray path, the streak count, the warp-texture grid cell, and the zoom
+    /// level it draws the field at. The zoom scales the field about the screen
+    /// center and moves no offset, so the layer follows the viewport zoom with no
+    /// parallax. The
     /// path and the streak count scale with the vanishing point distance:
     /// the side and nadir views land the point off screen, and the visible
     /// screen then starts at a larger distance, so a fixed path would put
-    /// every visible pixel past the far fade. The look parameters — the full
+    /// every visible pixel past the far fade. The streak speed reads the same
+    /// geometry twice over: the pattern advances one ray path per cycle, and the
+    /// shader ramps pixel speed with the distance from the vanishing point. So a
+    /// pose whose screen sits far from its point reads faster at the same rate.
+    /// The rate scales down by the denominator ratio past the component's speed
+    /// reference: the streaks sweep the screen center at one speed at every pose,
+    /// and a pose whose screen lies farther out lengthens its cycle instead of
+    /// running faster. The look parameters — the full
     /// flow rate, bands, color — are authored on the material, and
     /// the per-pose values write onto a play-mode clone of it, so the
     /// authored asset never carries the runtime answer. Unity 6.6's
@@ -236,12 +337,16 @@ namespace PixelEngine.Presentation
         [SerializeField, Range(0f, 1f)] private float flowRateFloor = 0f;
         [Tooltip("The largest elapsed time one frame may add to the flow clock, in seconds. A stalled frame, a tab-out, or a paused debugger reports a large elapsed time; the cap makes that a skip and not a jump.")]
         [SerializeField, Min(0.001f)] private float flowStepCapSeconds = 0.1f;
+        [Tooltip("The view the material's authored Flow Rate is tuned at, as a travel direction in view space: X along screen right, Y along screen up, Z against the gaze. (0, 0, -1) is travel straight ahead of a level gaze; (0, sin p, -cos p) is travel ahead with the gaze pitched down p. The rig works out that view's screen speed from it, so no path number is authored here. A pose whose screen sits farther along the acceleration ramp writes a slower rate, lands its screen-center speed on this view's center speed, and lengthens its cycle. A pose with a nearer screen keeps the authored rate, so the authored Flow Rate is the fastest the layer runs. The default is the head-on view pitched down 30 degrees.")]
+        [SerializeField] private Vector3 speedReferenceViewTravel = new Vector3(0f, 0.5f, -0.866f);
 
         private Material runtimeMaterial;
         private RenderTexture warpTexture;
         private bool missingReported;
         private float authoredFlowRate;
         private bool flowRateReadable;
+        private float authoredAccel;
+        private bool accelReadable;
         private float flowPhase;
         private double lastPhaseTime = -1;
 
@@ -256,6 +361,12 @@ namespace PixelEngine.Presentation
                 // write would compound and decay the flow toward zero.
                 flowRateReadable = warpMaterial.HasProperty("_FlowRate");
                 authoredFlowRate = flowRateReadable ? warpMaterial.GetFloat("_FlowRate") : 0f;
+                // The acceleration exponent sets the span of the shader's speed ramp,
+                // and the pose rule divides by that span, so a material that ramps
+                // harder spreads the pose-to-pose rate ratio wider. A material with no
+                // _Accel answers 0, and the pose rule scales by the ray path alone.
+                accelReadable = warpMaterial.HasProperty("_Accel");
+                authoredAccel = accelReadable ? warpMaterial.GetFloat("_Accel") : 0f;
                 // The canvas draws the RawImage with the UI default
                 // material, which takes the warp texture straight; the warp
                 // shader rides only the blit into the texture.
@@ -327,7 +438,21 @@ namespace PixelEngine.Presentation
             return texture;
         }
 
+        /// <summary>Write the flow field at the level the layer draws at, 1. The
+        /// form that predates the zoom rule, kept so a caller with no zoom to name
+        /// reads the field at its authored size.</summary>
         public void SetFlow(float3 viewTravelDir, float intensity)
+        {
+            SetFlow(viewTravelDir, intensity, 1f);
+        }
+
+        /// <summary>Write the flow field for one frame, at the caller's zoom level.
+        /// The zoom scales the field about the screen center and carries no offset, so
+        /// the layer follows the viewport's zoom with no parallax. The rig authors the
+        /// field — the vanishing point, the ray path, the fades, the streak spacing —
+        /// in field units at zoom 1, so a zoom level scales what the field shows and
+        /// moves no authored number.</summary>
+        public void SetFlow(float3 viewTravelDir, float intensity, float uvZoom)
         {
             if (outputImage == null || runtimeMaterial == null)
             {
@@ -358,11 +483,30 @@ namespace PixelEngine.Presentation
             runtimeMaterial.SetFloat("_RayPath", path);
             runtimeMaterial.SetFloat("_StreakDensity", streaks);
             runtimeMaterial.SetFloat("_Intensity", math.clamp(intensity, 0f, 1f));
+            // The zoom level scales the field about the screen center inside the
+            // shader, so the authored field numbers above stay in field units and a
+            // zoomed view reads them larger. The floor is the mapping's own guard: a
+            // level at 0 would divide by zero.
+            runtimeMaterial.SetFloat("_UVZoom", WarpFlowMath.ZoomLevel(uvZoom, 0.01f));
             // The streak speed reads the intensity: the authored Flow Rate is the
             // rate at full warp, and the same number drives brightness, so the
             // layer's speed and its strength move together. _FlowRate carries the
             // rate the rig is running at, which is the number a live read checks.
-            float rate = WarpFlowMath.FlowRate(authoredFlowRate, intensity, flowRateFloor);
+            // The pose rule sits on the same number: a pose whose screen sits farther
+            // along the shader's speed ramp than the reference view's does writes a
+            // proportionally slower rate, so the streaks sweep the screen center at one
+            // speed at every pose and the cycle lengthens instead of the speed growing.
+            // The reference is the authored view, read through the same three numbers.
+            float3 refTravel = speedReferenceViewTravel;
+            if (math.lengthsq(refTravel) < 1e-6f)
+            {
+                refTravel = new float3(0f, 0f, -1f);
+            }
+            float2 refPoint = WarpFlowMath.VanishingPoint(refTravel, focal, minAxial);
+            float referenceDenominator = WarpFlowMath.ScreenSpeedDenominator(
+                refPoint, WarpFlowMath.RayPath(refPoint, pathMargin), authoredAccel);
+            float denominator = WarpFlowMath.ScreenSpeedDenominator(vanishPoint, path, authoredAccel);
+            float rate = WarpFlowMath.SpeedRate(authoredFlowRate, intensity, flowRateFloor, referenceDenominator, denominator);
             if (flowRateReadable)
             {
                 runtimeMaterial.SetFloat("_FlowRate", rate);
