@@ -163,6 +163,16 @@ namespace PixelEngine.Presentation
         {
             return yawDegrees * (rollSign >= 0f ? 1f : -1f);
         }
+
+        /// <summary>The roll angle at a live nadir fade. A yaw step is a slide at the isometric look and a
+        /// roll at top-down, and the nadir cross-fade is the number that says which look the camera is in,
+        /// so the roll rides it: 0 fade answers no roll, a full fade answers the yaw whole, and the
+        /// cross-fade carries the roll in between. A layer that rolls at every pitch reads as a star
+        /// viewport turning under a camera that is translating its content.</summary>
+        public static float RollDegrees(float yawDegrees, float rollSign, float nadirFade)
+        {
+            return RollDegrees(yawDegrees, rollSign) * math.clamp(nadirFade, 0f, 1f);
+        }
     }
 
     /// <summary>
@@ -525,7 +535,7 @@ namespace PixelEngine.Presentation
                 authoredCellsWide, patternScale, authoredDotZoomFactor);
             AnsweredOpacity = StarfieldLayerMath.LayerOpacity(baseOpacity, nadirFade, pitchTransition,
                 pitchTransitionDip);
-            AnsweredRollDegrees = StarfieldLayerMath.RollDegrees(rollYawDegrees, rollSign);
+            AnsweredRollDegrees = StarfieldLayerMath.RollDegrees(rollYawDegrees, rollSign, nadirFade);
             AnsweredLayerSize = new Vector2(layerWidth, layerHeight);
 
             runtimeMaterial.SetVector("_Slide", new Vector4(AnsweredSlideCells + panSlide.x, panSlide.y, 0f, 0f));

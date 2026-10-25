@@ -440,5 +440,32 @@ namespace PixelEngine.Tests
             Assert.AreEqual(0f, StarfieldLayerMath.LayerOpacity(1f, 0f, 3f, 4f), 1e-5f);
             Assert.GreaterOrEqual(StarfieldLayerMath.LayerOpacity(0.2f, 0.5f, 2f, 2f), 0f);
         }
+
+        [Test]
+        public void ANadirFadeOfZeroCarriesNoRoll()
+        {
+            // The yaw step is a slide at the isometric look. A roll applied there reads as a star
+            // viewport turning under a camera whose world content is translating, so the fade gate
+            // answers no roll where the baked layer stands.
+            Assert.AreEqual(0f, StarfieldLayerMath.RollDegrees(-45f, 1f, 0f), 1e-6f);
+            Assert.AreEqual(0f, StarfieldLayerMath.RollDegrees(315f, -1f, 0f), 1e-6f);
+        }
+
+        [Test]
+        public void AFullNadirFadeCarriesTheRollWhole()
+        {
+            Assert.AreEqual(-45f, StarfieldLayerMath.RollDegrees(-45f, 1f, 1f), 1e-5f);
+            Assert.AreEqual(45f, StarfieldLayerMath.RollDegrees(-45f, -1f, 1f), 1e-5f);
+        }
+
+        [Test]
+        public void TheRollRidesTheNadirCrossFade()
+        {
+            // The cross-fade is the transition between the two looks, and a roll that jumped from 0 to
+            // the whole yaw at one tick would read as a snap mid-tilt.
+            Assert.AreEqual(-22.5f, StarfieldLayerMath.RollDegrees(-45f, 1f, 0.5f), 1e-5f);
+            Assert.AreEqual(-45f, StarfieldLayerMath.RollDegrees(-45f, 1f, 3f), 1e-5f);
+            Assert.AreEqual(0f, StarfieldLayerMath.RollDegrees(-45f, 1f, -2f), 1e-6f);
+        }
     }
 }
