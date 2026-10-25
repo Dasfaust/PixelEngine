@@ -51,6 +51,36 @@ namespace PixelEngine.Presentation
             return pose * cellsWide * parallaxFactor;
         }
 
+        /// <summary>The camera's pan travel in screen pixels. A world unit is `unitsPerPixel` pixels
+        /// wide on the render, and the UV zoom magnifies that, so the travel in pixels is the world
+        /// travel divided by the units per pixel and multiplied by the zoom. The pan projects onto the
+        /// camera's own screen axes, which is what carries the pitch and the yaw: the camera's right and
+        /// up are the screen's right and up, so a world pan lands on the screen the player sees, at any
+        /// pitch and any yaw, with no authored angle. The answer is one pair, x across the screen and
+        /// y up it.</summary>
+        public static float2 ScreenTravelPixels(float3 pan, float3 cameraRight, float3 cameraUp,
+            float unitsPerPixel, float uvZoom)
+        {
+            float perPixel = math.max(unitsPerPixel, 0.0001f);
+            float zoom = math.max(uvZoom, 1f);
+            return new float2(math.dot(pan, cameraRight), math.dot(pan, cameraUp)) / perPixel * zoom;
+        }
+
+        /// <summary>The slide in star cells for a travel across the screen in pixels. A cell is the
+        /// layer's pixel width times the pattern scale, divided by the pattern's cell count, so the
+        /// travel divides by that cell width to answer cells. The parallax factor scales the travel, so
+        /// 1 carries the sky with the world content and 0 pins it. The camera's pan and the sky's travel
+        /// run opposite on screen, and the slide's sign carries that: a bigger slide reads as the field
+        /// travelling the other way, so a pan the camera makes carries the sky the way the world content
+        /// goes.</summary>
+        public static float2 PanSlideCells(float2 screenTravelPixels, float layerWidthPixels,
+            float patternCellsWide, float patternScale, float panParallaxFactor)
+        {
+            float cellPixels = math.max(layerWidthPixels, 1f) * math.max(patternScale, 0.0001f)
+                / math.max(patternCellsWide, 1f);
+            return screenTravelPixels / math.max(cellPixels, 0.0001f) * panParallaxFactor;
+        }
+
         /// <summary>The pattern scale for a camera UV zoom level. The travel above zoom 1 scales at
         /// the layer's own rate, so zoom 1 answers the authored field for every rate. A level below
         /// 1 answers the same, because the camera's zoom floor is 1 and a shrunk field reads as a
@@ -111,6 +141,21 @@ namespace PixelEngine.Presentation
             return baseValue + (1f - baseValue) * math.clamp(nadirFade, 0f, 1f);
         }
 
+        /// <summary>The layer alpha while the camera pitches between notch levels. The pitch move is
+        /// the one moment the sky is in motion, and the stars are the crisp thing on a screen that is
+        /// turning, so the layer dips through the move and returns when the pitch lands: the transition
+        /// amount is 0 at a landing and 1 mid-move. The dip depth is authored, so a layer can stay fully
+        /// lit through a pitch move at 0 and vanish at 1. The answer never goes below zero, and at a
+        /// landing it answers the cross-fade alpha unchanged.</summary>
+        public static float LayerOpacity(float baseOpacity, float nadirFade, float transitionAmount,
+            float transitionDip)
+        {
+            float full = LayerOpacity(baseOpacity, nadirFade);
+            float amount = math.clamp(transitionAmount, 0f, 1f);
+            float dip = math.clamp(transitionDip, 0f, 1f);
+            return full * (1f - dip * amount);
+        }
+
         /// <summary>The pattern roll angle for a camera yaw. The camera rolls by its yaw at nadir, so
         /// the pattern carries that angle, and the sign names the direction the stars travel against
         /// the world content.</summary>
@@ -166,6 +211,10 @@ namespace PixelEngine.Presentation
         [SerializeField, Range(0f, 2f)] private float parallaxFactor = 0.5f;
         [Tooltip("Pattern spread as a fraction of the view's zoom travel. 1 matches the baked layer's spread, and 0 holds the field at its authored cell count.")]
         [SerializeField, Range(0f, 2f)] private float zoomParallaxFactor = 0.5f;
+        [Tooltip("Sky travel as a fraction of the world content's travel over the same camera pan. 1 carries the sky with the world, and 0 pins it. The pan projects onto the camera's screen axes, so the pitch and the yaw need no authored angle.")]
+        [SerializeField, Range(0f, 4f)] private float panParallaxFactor = 0.5f;
+        [Tooltip("How far the layer dims while the camera pitches between notch levels. 1 vanishes mid-move and returns at the landing, and 0 keeps the layer lit through the turn.")]
+        [SerializeField, Range(0f, 1f)] private float pitchTransitionDip = 1f;
         [Tooltip("The layer alpha with no nadir fade. The field reaches full alpha at a full fade for any value here, so the top-down view keeps its crisp stars.")]
         [SerializeField, Range(0f, 1f)] private float baseOpacity = 1f;
         [Tooltip("Roll direction. 1 rolls the pattern with the camera yaw, -1 against it. The look pass picks the sign that carries the stars with the world content.")]
@@ -176,6 +225,7 @@ namespace PixelEngine.Presentation
         private float pose;
         private float nadirFade;
         private float rollYawDegrees;
+        private float pitchTransition;
         private float authoredCellsWide = 96f;
         private float authoredStarSizePixels = 2f;
         private float authoredDotZoomFactor = 0f;
@@ -194,6 +244,11 @@ namespace PixelEngine.Presentation
 
         /// <summary>The slide in star cells the layer answered on the last apply.</summary>
         public float AnsweredSlideCells { get; private set; }
+
+        /// <summary>The travel the layer answered for the camera's pan, in pattern cells, across and
+        /// up the screen. The yaw slide answers separately as <see cref="AnsweredSlideCells"/>, and the
+        /// layer writes the sum to the material.</summary>
+        public Vector2 AnsweredPanSlideCells { get; private set; }
 
         /// <summary>The pattern scale the layer answered on the last apply.</summary>
         public float AnsweredPatternScale { get; private set; } = 1f;
@@ -356,6 +411,15 @@ namespace PixelEngine.Presentation
             Apply();
         }
 
+        /// <summary>Set the pitch transition amount (0 at a landing, 1 mid-move between the notch
+        /// levels). The layer dims through the move by the authored dip and returns at the landing, so
+        /// the crisp stars are off the screen while the sky is turning.</summary>
+        public void SetPitchTransition(float value)
+        {
+            pitchTransition = math.clamp(value, 0f, 1f);
+            Apply();
+        }
+
         /// <summary>
         /// Set the look numbers the play-mode look pass tunes, so a compare runs on one scene with no
         /// scene edit between reads. Each setter re-answers the derived numbers on the spot.
@@ -440,13 +504,31 @@ namespace PixelEngine.Presentation
             AnsweredPatternScale = patternScale;
             AnsweredLatticeCount = new Vector2(lattice.x, lattice.y);
             AnsweredPatternCells = new Vector2(pattern.x, pattern.y);
+
+            // The camera's pan scrolls the field across and up the screen. The pivot position is the
+            // pan, so the layer reads the camera rig's own number and needs no caller for it. The travel
+            // projects onto the camera's own screen axes, so the pitch and the yaw are carried by the
+            // camera's transform and the rule needs no authored angle, at nadir and at the isometric
+            // landing alike.
+            Camera view = parentCamera != null ? parentCamera.GetCamera() : null;
+            float unitsPerPixel = parentCamera != null ? parentCamera.GetUnitsPerPixel() : 1f;
+            float3 viewRight = view != null ? view.transform.right : Vector3.right;
+            float3 viewUp = view != null ? view.transform.up : Vector3.up;
+            float3 panWorld = parentCamera != null ? parentCamera.GetPivotPosition() : float3.zero;
+            float2 screenTravel = StarfieldLayerMath.ScreenTravelPixels(panWorld, viewRight, viewUp,
+                unitsPerPixel, uvZoom);
+            float2 panSlide = StarfieldLayerMath.PanSlideCells(screenTravel, layerWidth, authoredCellsWide,
+                patternScale, panParallaxFactor);
+            AnsweredPanSlideCells = new Vector2(panSlide.x, panSlide.y);
+
             AnsweredDotRadiusCells = StarfieldLayerMath.DotRadiusCells(authoredStarSizePixels, layerWidth,
                 authoredCellsWide, patternScale, authoredDotZoomFactor);
-            AnsweredOpacity = StarfieldLayerMath.LayerOpacity(baseOpacity, nadirFade);
+            AnsweredOpacity = StarfieldLayerMath.LayerOpacity(baseOpacity, nadirFade, pitchTransition,
+                pitchTransitionDip);
             AnsweredRollDegrees = StarfieldLayerMath.RollDegrees(rollYawDegrees, rollSign);
             AnsweredLayerSize = new Vector2(layerWidth, layerHeight);
 
-            runtimeMaterial.SetVector("_Slide", new Vector4(AnsweredSlideCells, 0f, 0f, 0f));
+            runtimeMaterial.SetVector("_Slide", new Vector4(AnsweredSlideCells + panSlide.x, panSlide.y, 0f, 0f));
             runtimeMaterial.SetFloat("_ZoomScale", AnsweredPatternScale);
             runtimeMaterial.SetVector("_PatternCells", new Vector4(AnsweredPatternCells.x, AnsweredPatternCells.y, 0f, 0f));
             runtimeMaterial.SetFloat("_DotRadiusCells", AnsweredDotRadiusCells);

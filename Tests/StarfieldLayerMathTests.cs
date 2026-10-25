@@ -325,5 +325,120 @@ namespace PixelEngine.Tests
             Assert.AreEqual(45f, math.abs(StarfieldLayerMath.RollDegrees(45f, -1f)), 1e-5f);
             Assert.AreEqual(0f, StarfieldLayerMath.RollDegrees(0f, -1f), 1e-5f);
         }
+
+        // --- Camera pan travel ---
+
+        [Test]
+        public void APanAlongTheCameraRightAxisAnswersThatScreenAxis()
+        {
+            // The pan projects onto the camera's own screen axes, so the authored rule needs no angle.
+            // A world pan straight along the camera's right axis lands entirely on the screen's across
+            // axis and nothing on its up axis.
+            float3 pan = new float3(10f, 0f, 0f);
+            float2 travel = StarfieldLayerMath.ScreenTravelPixels(
+                pan, new float3(1f, 0f, 0f), new float3(0f, 1f, 0f), 1f / 64f, 1f);
+            Assert.AreEqual(640f, travel.x, 1e-3f);
+            Assert.AreEqual(0f, travel.y, 1e-3f);
+        }
+
+        [Test]
+        public void AWorldPanProjectsItsCameraUpComponentOnly()
+        {
+            // At a pitched camera the screen's up axis is tilted off the world's vertical, so a pan
+            // along the world Z axis reads the component that lies along that axis. The tilt is carried
+            // by the axis the caller passes, and not by an authored angle.
+            float3 up30 = new float3(0f, 0.5f, 0.8660254f);
+            float2 tilted = StarfieldLayerMath.ScreenTravelPixels(
+                new float3(0f, 0f, 10f), new float3(1f, 0f, 0f), up30, 1f / 64f, 1f);
+            Assert.AreEqual(0f, tilted.x, 1e-3f);
+            Assert.AreEqual(554.256f, tilted.y, 1e-2f);
+
+            // At top-down the screen's up axis lies along the world Z axis, so the same pan reads whole.
+            float2 topDown = StarfieldLayerMath.ScreenTravelPixels(
+                new float3(0f, 0f, 10f), new float3(1f, 0f, 0f), new float3(0f, 0f, 1f), 1f / 64f, 1f);
+            Assert.AreEqual(640f, topDown.y, 1e-3f);
+        }
+
+        [Test]
+        public void TheUVZoomMagnifiesThePanTravel()
+        {
+            // A zoomed view carries the same world pan over more screen pixels, so the travel scales
+            // with the zoom, and the star field keeps its place against the world content.
+            float2 atOne = StarfieldLayerMath.ScreenTravelPixels(
+                new float3(10f, 0f, 0f), new float3(1f, 0f, 0f), new float3(0f, 1f, 0f), 1f / 64f, 1f);
+            float2 atFour = StarfieldLayerMath.ScreenTravelPixels(
+                new float3(10f, 0f, 0f), new float3(1f, 0f, 0f), new float3(0f, 1f, 0f), 1f / 64f, 4f);
+            Assert.AreEqual(640f, atOne.x, 1e-3f);
+            Assert.AreEqual(2560f, atFour.x, 1e-2f);
+        }
+
+        [Test]
+        public void PanTravelConvertsToCellsByTheLiveCellWidth()
+        {
+            // 640 pixels of travel on a 1920-pixel layer holding 96 pattern cells at scale 1 crosses a
+            // third of the pattern, and the authored factor scales that.
+            float2 cells = StarfieldLayerMath.PanSlideCells(
+                new float2(640f, 320f), 1920f, 96f, 1f, 0.5f);
+            Assert.AreEqual(16f, cells.x, 1e-4f);
+            Assert.AreEqual(8f, cells.y, 1e-4f);
+        }
+
+        [Test]
+        public void ADeeperZoomCutsThePanTravelPerWorldUnit()
+        {
+            // The same pixel travel lands on fewer pattern cells when the cells are bigger on screen,
+            // so a deep zoom answers the same world pan as the same sky distance and not as a faster
+            // sky. The pattern scale carries that.
+            float2 scaleOne = StarfieldLayerMath.PanSlideCells(new float2(640f, 0f), 1920f, 96f, 1f, 1f);
+            float2 scaleTwo = StarfieldLayerMath.PanSlideCells(new float2(640f, 0f), 1920f, 96f, 2f, 1f);
+            Assert.AreEqual(32f, scaleOne.x, 1e-4f);
+            Assert.AreEqual(16f, scaleTwo.x, 1e-4f);
+        }
+
+        [Test]
+        public void APanParallaxFactorOfZeroPinsTheSky()
+        {
+            float2 pinned = StarfieldLayerMath.PanSlideCells(new float2(640f, 640f), 1920f, 96f, 1f, 0f);
+            Assert.AreEqual(0f, pinned.x, 1e-6f);
+            Assert.AreEqual(0f, pinned.y, 1e-6f);
+        }
+
+        // --- Pitch transition dip ---
+
+        [Test]
+        public void TheTransitionDipLeavesTheLayerWholeAtALanding()
+        {
+            // The dip is a mid-move rule. At a landing the transition amount reads 0 and the layer
+            // answers the cross-fade alpha unchanged, so the star field stands whole at both notches.
+            Assert.AreEqual(StarfieldLayerMath.LayerOpacity(0.6f, 0f),
+                StarfieldLayerMath.LayerOpacity(0.6f, 0f, 0f, 1f), 1e-5f);
+            Assert.AreEqual(StarfieldLayerMath.LayerOpacity(0.6f, 1f),
+                StarfieldLayerMath.LayerOpacity(0.6f, 1f, 0f, 1f), 1e-5f);
+        }
+
+        [Test]
+        public void TheTransitionDipVanishesAtAFullMoveWithAFullDip()
+        {
+            Assert.AreEqual(0f, StarfieldLayerMath.LayerOpacity(1f, 1f, 1f, 1f), 1e-5f);
+            Assert.AreEqual(0.5f, StarfieldLayerMath.LayerOpacity(1f, 1f, 1f, 0.5f), 1e-5f);
+        }
+
+        [Test]
+        public void TheTransitionDipShrinksTheAlphaBetweenTheLandings()
+        {
+            float full = StarfieldLayerMath.LayerOpacity(0.8f, 0f);
+            float mid = StarfieldLayerMath.LayerOpacity(0.8f, 0f, 0.5f, 1f);
+            Assert.Greater(full, mid);
+            Assert.AreEqual(0.4f, mid, 1e-5f);
+        }
+
+        [Test]
+        public void TheTransitionDipStaysAtLeastAWholeDipFromTheAmount()
+        {
+            // A transition amount above 1 and a dip above 1 are Inspector inputs, and an answer below
+            // zero is an alpha the canvas cannot carry. The clamps keep the answer on screen.
+            Assert.AreEqual(0f, StarfieldLayerMath.LayerOpacity(1f, 0f, 3f, 4f), 1e-5f);
+            Assert.GreaterOrEqual(StarfieldLayerMath.LayerOpacity(0.2f, 0.5f, 2f, 2f), 0f);
+        }
     }
 }
