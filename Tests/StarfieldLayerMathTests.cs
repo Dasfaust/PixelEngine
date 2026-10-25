@@ -467,5 +467,88 @@ namespace PixelEngine.Tests
             Assert.AreEqual(-45f, StarfieldLayerMath.RollDegrees(-45f, 1f, 3f), 1e-5f);
             Assert.AreEqual(0f, StarfieldLayerMath.RollDegrees(-45f, 1f, -2f), 1e-6f);
         }
+
+        // --- Roll lead and the visibility lag ---
+
+        [Test]
+        public void ARollLeadOfOneRidesTheCrossFade()
+        {
+            // The lead is the authored shape, and the plain ride is its baseline: a lead of 1 answers
+            // the gated roll unchanged, so a reader can set the lead to 1 and get the ride.
+            Assert.AreEqual(StarfieldLayerMath.RollDegrees(-45f, 1f, 0.5f),
+                StarfieldLayerMath.RollDegrees(-45f, 1f, 0.5f, 1f), 1e-5f);
+            Assert.AreEqual(StarfieldLayerMath.RollDegrees(-45f, 1f, 0.25f),
+                StarfieldLayerMath.RollDegrees(-45f, 1f, 0.25f, 1f), 1e-5f);
+        }
+
+        [Test]
+        public void ARollLeadOfTwoTurnsTheSkyAtHalfTheFade()
+        {
+            // The look rule this carries: the sky is turned by the time the fade reaches its middle, so
+            // the field brightens onto a sky that has already moved and not onto one that is moving.
+            Assert.AreEqual(-45f, StarfieldLayerMath.RollDegrees(-45f, 1f, 0.5f, 2f), 1e-5f);
+            Assert.AreEqual(-22.5f, StarfieldLayerMath.RollDegrees(-45f, 1f, 0.25f, 2f), 1e-5f);
+        }
+
+        [Test]
+        public void TheRollLeadStopsAtAFullRollAndAtNoFade()
+        {
+            // The lead multiplies the fade, and the gate clamps it, so a deep lead cannot run the roll
+            // past the yaw, and no fade cannot roll at all.
+            Assert.AreEqual(-45f, StarfieldLayerMath.RollDegrees(-45f, 1f, 0.9f, 4f), 1e-5f);
+            Assert.AreEqual(0f, StarfieldLayerMath.RollDegrees(-45f, 1f, 0f, 4f), 1e-6f);
+            Assert.AreEqual(-45f, StarfieldLayerMath.RollDegrees(-45f, 1f, 1f, 4f), 1e-5f);
+            // A lead of 0 multiplies the fade the roll reads by nothing, so the roll answers no roll at
+            // any fade. The Inspector range starts at 1; this is the clamp boundary below it.
+            Assert.AreEqual(0f, StarfieldLayerMath.RollDegrees(-45f, 1f, 0.5f, 0f), 1e-6f);
+        }
+
+        [Test]
+        public void TheVisibilityLagKeepsTheFieldDimOnTheNearSideOfTheTilt()
+        {
+            // At the cross-fade's middle a lagged visibility reads well below half, so the roll runs
+            // while the stars are faint. The endpoints are the landings: no fade answers no visibility,
+            // a full fade answers full visibility, and the lag moves the shape between them and nowhere
+            // at the ends.
+            Assert.AreEqual(0f, StarfieldLayerMath.FadeWeight(0f, 0.6f), 1e-6f);
+            Assert.AreEqual(1f, StarfieldLayerMath.FadeWeight(1f, 0.6f), 1e-5f);
+            Assert.AreEqual(1f, StarfieldLayerMath.FadeWeight(1f, 1f), 1e-5f);
+            Assert.AreEqual(0.5f, StarfieldLayerMath.FadeWeight(0.5f, 0f), 1e-5f);
+            Assert.Greater(0.5f, StarfieldLayerMath.FadeWeight(0.5f, 0.6f));
+            Assert.Greater(StarfieldLayerMath.FadeWeight(0.5f, 0.6f),
+                StarfieldLayerMath.FadeWeight(0.5f, 1f));
+            Assert.AreEqual(0.14356f, StarfieldLayerMath.FadeWeight(0.5f, 0.6f), 1e-4f);
+        }
+
+        [Test]
+        public void TheVisibilityLagRunsTheFadeBehindTheRoll()
+        {
+            // The pair is the look rule in one line: at half the cross-fade the roll is whole and the
+            // visibility is a sixth of its own span, so the turn completes before the field reads.
+            float roll = math.abs(StarfieldLayerMath.RollDegrees(-45f, 1f, 0.5f, 2f));
+            float visibility = StarfieldLayerMath.FadeWeight(0.5f, 0.6f);
+            Assert.AreEqual(45f, roll, 1e-5f);
+            Assert.Greater(0.2f, visibility);
+        }
+
+        [Test]
+        public void TheLaggedVisibilityFeedsTheLayerAlpha()
+        {
+            // The alpha the canvas carries is the lagged visibility, so the mid-fade read is the
+            // dimmed one and not the cross-fade's own middle.
+            // The layer's authored base opacity is what gives the cross-fade work to do: at a base of 1
+            // the layer stands at full alpha at every fade, and a lag shapes a ramp that is flat. Below
+            // full base, the lagged visibility lands the alpha lower on the near side of the tilt.
+            float baseAlpha = 0.35f;
+            float lagged = StarfieldLayerMath.LayerOpacity(baseAlpha, StarfieldLayerMath.FadeWeight(0.5f, 0.6f));
+            float plain = StarfieldLayerMath.LayerOpacity(baseAlpha, 0.5f);
+            Assert.Greater(plain, lagged);
+            Assert.AreEqual(0.675f, plain, 1e-5f);
+            Assert.AreEqual(0.44331f, lagged, 1e-4f);
+            Assert.AreEqual(1f, StarfieldLayerMath.LayerOpacity(baseAlpha, StarfieldLayerMath.FadeWeight(1f, 0.6f)),
+                1e-5f);
+            Assert.AreEqual(baseAlpha,
+                StarfieldLayerMath.LayerOpacity(baseAlpha, StarfieldLayerMath.FadeWeight(0f, 0.6f)), 1e-5f);
+        }
     }
 }

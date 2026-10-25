@@ -173,6 +173,28 @@ namespace PixelEngine.Presentation
         {
             return RollDegrees(yawDegrees, rollSign) * math.clamp(nadirFade, 0f, 1f);
         }
+
+        /// <summary>The roll angle at a live nadir fade, with the roll led ahead of the fade. The lead
+        /// multiplies the fade the roll reads, so a lead of 2 answers a full roll at half the fade: the
+        /// sky turns while the layer is still dim, and the field comes back into view already turned.
+        /// A lead of 1 rides the fade, which is the shape where the last part of the turn lands on a
+        /// field the player can already see.</summary>
+        public static float RollDegrees(float yawDegrees, float rollSign, float nadirFade, float rollLead)
+        {
+            float lead = math.max(rollLead, 0f);
+            return RollDegrees(yawDegrees, rollSign, math.clamp(nadirFade * lead, 0f, 1f));
+        }
+
+        /// <summary>The fade weight the layer's visibility reads. The lag pushes the visibility ramp
+        /// back along the cross-fade, so the field stays dim through the near side of the tilt and
+        /// brightens as the camera closes on top-down. The roll reads the fade ahead of this number,
+        /// which is what lets the sky turn before the stars come back into view.</summary>
+        public static float FadeWeight(float nadirFade, float fadeLag)
+        {
+            float fade = math.clamp(nadirFade, 0f, 1f);
+            float lag = math.clamp(fadeLag, 0f, 1f);
+            return math.pow(fade, 1f + 3f * lag);
+        }
     }
 
     /// <summary>
@@ -229,6 +251,17 @@ namespace PixelEngine.Presentation
         [SerializeField, Range(0f, 1f)] private float baseOpacity = 1f;
         [Tooltip("Roll direction. 1 rolls the pattern with the camera yaw, -1 against it. The look pass picks the sign that carries the stars with the world content.")]
         [SerializeField, Range(-1f, 1f)] private float rollSign = 1f;
+
+        [SerializeField, Range(1f, 4f)]
+        [Tooltip("How far ahead of the nadir cross-fade the roll runs. A lead of 2 turns the sky to the " +
+                 "authored yaw at half the fade, so the stars come back into view already turned. A lead " +
+                 "of 1 rides the fade, and the last part of the turn lands on a field already visible.")]
+        private float rollLead = 2f;
+
+        [SerializeField, Range(0f, 1f)]
+        [Tooltip("How far back along the nadir cross-fade the layer's visibility sits. The lag keeps the " +
+                 "field dim through the near side of the tilt, so the roll runs while the stars are faint.")]
+        private float fadeLag = 0.6f;
 
         private Material runtimeMaterial;
         private Canvas canvas;
@@ -301,6 +334,12 @@ namespace PixelEngine.Presentation
         /// <summary>The roll direction the layer answers with.</summary>
         public float RollSign => rollSign;
 
+        /// <summary>How far ahead of the cross-fade the roll runs.</summary>
+        public float RollLead => rollLead;
+
+        /// <summary>How far back along the cross-fade the layer's visibility sits.</summary>
+        public float FadeLag => fadeLag;
+
         private void Awake()
         {
             ReadAuthoredNumbers();
@@ -321,6 +360,13 @@ namespace PixelEngine.Presentation
             if (parentCamera != null)
             {
                 parentCamera.OnCameraSnapped.RemoveListener(OnCameraSnapped);
+            }
+
+            // The authored asset goes back on the Graphic, so the scene reference a save writes is the
+            // authored asset and not the play-mode clone.
+            if (outputImage != null && starfieldMaterial != null)
+            {
+                outputImage.material = starfieldMaterial;
             }
         }
 
@@ -489,8 +535,19 @@ namespace PixelEngine.Presentation
 
             if (runtimeMaterial == null)
             {
-                runtimeMaterial = new Material(starfieldMaterial);
-                outputImage.material = runtimeMaterial;
+                // The clone carries the rig-written numbers, and it is never a saved object: a clone
+                // assigned to a scene Graphic is serialized into the scene as a scene-local material, and
+                // the scene then stops referencing the authored asset. HideFlags.DontSave keeps the clone
+                // out of any saved file, and the Graphic takes it only while the game runs, because a
+                // save in edit mode serializes whatever reference the Graphic holds at that moment.
+                runtimeMaterial = new Material(starfieldMaterial)
+                {
+                    hideFlags = UnityEngine.HideFlags.DontSave
+                };
+                if (UnityEngine.Application.isPlaying)
+                {
+                    outputImage.material = runtimeMaterial;
+                }
             }
 
             if (canvas == null)
@@ -533,9 +590,10 @@ namespace PixelEngine.Presentation
 
             AnsweredDotRadiusCells = StarfieldLayerMath.DotRadiusCells(authoredStarSizePixels, layerWidth,
                 authoredCellsWide, patternScale, authoredDotZoomFactor);
-            AnsweredOpacity = StarfieldLayerMath.LayerOpacity(baseOpacity, nadirFade, pitchTransition,
-                pitchTransitionDip);
-            AnsweredRollDegrees = StarfieldLayerMath.RollDegrees(rollYawDegrees, rollSign, nadirFade);
+            AnsweredOpacity = StarfieldLayerMath.LayerOpacity(baseOpacity,
+                StarfieldLayerMath.FadeWeight(nadirFade, fadeLag), pitchTransition, pitchTransitionDip);
+            AnsweredRollDegrees = StarfieldLayerMath.RollDegrees(rollYawDegrees, rollSign, nadirFade,
+                rollLead);
             AnsweredLayerSize = new Vector2(layerWidth, layerHeight);
 
             runtimeMaterial.SetVector("_Slide", new Vector4(AnsweredSlideCells + panSlide.x, panSlide.y, 0f, 0f));
