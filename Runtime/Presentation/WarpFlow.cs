@@ -119,6 +119,41 @@ namespace PixelEngine.Presentation
             return new int2(math.max(width / s, 1), math.max(height / s, 1));
         }
 
+        /// <summary>The zoom level the layer draws at: the caller's zoom level,
+        /// floored. The field mapping divides by this number, so a level at or
+        /// under the floor would send the field to infinity. The floor is a
+        /// safety rule and not a look: a live viewport never reports a level under 1,
+        /// because the camera clamps its own zoom at 1.</summary>
+        public static float ZoomLevel(float zoomLevel, float floorLevel)
+        {
+            return math.max(zoomLevel, math.max(floorLevel, 0.01f));
+        }
+
+        /// <summary>The field coordinate a screen pixel reads at: the screen UV,
+        /// scaled about the screen center. The viewport convention is the same one the
+        /// subpixel viewport layer maps by, and the pattern carries no parallax: the
+        /// zoom moves no offset, it scales.
+        ///
+        /// The field is authored at zoom 1, so zoom 1 is the identity. At zoom 2 the
+        /// field draws twice as large about the center, and the vanishing point slides
+        /// outward to twice its offset: a narrower view window over a magnified field
+        /// is what a zoom reads as, and the point is part of that field.
+        ///
+        /// The inverse is <see cref="ScreenUv"/>, and the pair round-trips.</summary>
+        public static float2 FieldUv(float2 screenUv, float zoomLevel)
+        {
+            return (screenUv - 0.5f) / ZoomLevel(zoomLevel, 0.01f) + 0.5f;
+        }
+
+        /// <summary>The screen coordinate a field coordinate lands on: the inverse of
+        /// <see cref="FieldUv">. The rig authors the field — the vanishing point, the ray
+        /// path, the fades — in field units, so this is how a field number shows on
+        /// screen: an offset from the center scales by the zoom level.</summary>
+        public static float2 ScreenUv(float2 fieldUv, float zoomLevel)
+        {
+            return (fieldUv - 0.5f) * ZoomLevel(zoomLevel, 0.01f) + 0.5f;
+        }
+
         /// <summary>The flow rate the layer runs at for a given intensity: the
         /// authored full rate scaled by that intensity, so the streak speed
         /// reads the warp strength. The rule is linear: half intensity is half
@@ -241,7 +276,10 @@ namespace PixelEngine.Presentation
     ///
     /// The caller names the travel direction in view space and an intensity;
     /// the rig answers the vanishing point, the axial sign, the ray count,
-    /// the ray path, the streak count, and the warp-texture grid cell. The
+    /// the ray path, the streak count, the warp-texture grid cell, and the zoom
+    /// level it draws the field at. The zoom scales the field about the screen
+    /// center and moves no offset, so the layer follows the viewport zoom with no
+    /// parallax. The
     /// path and the streak count scale with the vanishing point distance:
     /// the side and nadir views land the point off screen, and the visible
     /// screen then starts at a larger distance, so a fixed path would put
@@ -400,7 +438,21 @@ namespace PixelEngine.Presentation
             return texture;
         }
 
+        /// <summary>Write the flow field at the level the layer draws at, 1. The
+        /// form that predates the zoom rule, kept so a caller with no zoom to name
+        /// reads the field at its authored size.</summary>
         public void SetFlow(float3 viewTravelDir, float intensity)
+        {
+            SetFlow(viewTravelDir, intensity, 1f);
+        }
+
+        /// <summary>Write the flow field for one frame, at the caller's zoom level.
+        /// The zoom scales the field about the screen center and carries no offset, so
+        /// the layer follows the viewport's zoom with no parallax. The rig authors the
+        /// field — the vanishing point, the ray path, the fades, the streak spacing —
+        /// in field units at zoom 1, so a zoom level scales what the field shows and
+        /// moves no authored number.</summary>
+        public void SetFlow(float3 viewTravelDir, float intensity, float uvZoom)
         {
             if (outputImage == null || runtimeMaterial == null)
             {
@@ -431,6 +483,11 @@ namespace PixelEngine.Presentation
             runtimeMaterial.SetFloat("_RayPath", path);
             runtimeMaterial.SetFloat("_StreakDensity", streaks);
             runtimeMaterial.SetFloat("_Intensity", math.clamp(intensity, 0f, 1f));
+            // The zoom level scales the field about the screen center inside the
+            // shader, so the authored field numbers above stay in field units and a
+            // zoomed view reads them larger. The floor is the mapping's own guard: a
+            // level at 0 would divide by zero.
+            runtimeMaterial.SetFloat("_UVZoom", WarpFlowMath.ZoomLevel(uvZoom, 0.01f));
             // The streak speed reads the intensity: the authored Flow Rate is the
             // rate at full warp, and the same number drives brightness, so the
             // layer's speed and its strength move together. _FlowRate carries the

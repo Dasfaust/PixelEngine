@@ -523,6 +523,88 @@ namespace PixelEngine.Tests
             Assert.AreEqual(path, WarpFlowMath.RayPath(vp, 0.15f), 0f, "the path the fade reads is the path the rate divides by");
         }
 
+        // The zoom mapping. The layer scales the field about the screen center by the
+        // viewport's UV zoom level, and moves no offset, so a zoomed view reads the
+        // authored field larger. These tests state the scale, the center anchor, the
+        // round trip, and the floor the mapping divides by.
+        [Test]
+        public void ZoomLevel_LeavesTheAuthoredLevel_StandingOverTheFloor()
+        {
+            foreach (float level in new[] { 1f, 2f, 4f, 8.5f })
+            {
+                Assert.AreEqual(level, WarpFlowMath.ZoomLevel(level, 0.01f), 1e-6f, $"level {level} stands");
+            }
+        }
+
+        [Test]
+        public void ZoomLevel_FloorsTheLevel_BecauseTheMappingDividesByIt()
+        {
+            Assert.AreEqual(0.01f, WarpFlowMath.ZoomLevel(0f, 0.01f), 1e-6f, "a collapsed level lands on the floor");
+            Assert.AreEqual(0.01f, WarpFlowMath.ZoomLevel(-3f, 0.01f), 1e-6f, "a negative level lands on the floor");
+            Assert.AreEqual(0.5f, WarpFlowMath.ZoomLevel(0.2f, 0.5f), 1e-6f, "the authored floor wins over a lower level");
+            Assert.AreEqual(0.01f, WarpFlowMath.ZoomLevel(0f, 0f), 1e-6f, "the mapping keeps its own floor under any authored floor");
+        }
+
+        [Test]
+        public void FieldUv_IsTheIdentity_AtZoomOne_AndHoldsTheCenterAtEveryZoom()
+        {
+            foreach (var uv in new[] { new float2(0f, 0f), new float2(0.5f, 0.5f), new float2(1f, 0f), new float2(0.313f, 0.777f) })
+            {
+                float2 atOne = WarpFlowMath.FieldUv(uv, 1f);
+                Assert.AreEqual(uv.x, atOne.x, 1e-6f, $"uv {uv} x at zoom 1");
+                Assert.AreEqual(uv.y, atOne.y, 1e-6f, $"uv {uv} y at zoom 1");
+            }
+            foreach (float zoom in new[] { 1f, 2f, 4f, 8f, 0.01f })
+            {
+                float2 center = WarpFlowMath.FieldUv(new float2(0.5f, 0.5f), zoom);
+                Assert.AreEqual(0.5f, center.x, 1e-6f, $"the center x maps to the center at zoom {zoom}: the mapping scales, it moves no offset");
+                Assert.AreEqual(0.5f, center.y, 1e-6f, $"the center y maps to the center at zoom {zoom}");
+            }
+        }
+
+        [Test]
+        public void FieldUv_ScalesTheOffsetByTheZoomLevel_AndTheScreenMappingUndoesIt()
+        {
+            var uv = new float2(0.75f, 0.25f);   // a quarter screen right, a quarter down
+            foreach (float zoom in new[] { 1f, 2f, 4f, 8f })
+            {
+                float2 field = WarpFlowMath.FieldUv(uv, zoom);
+                Assert.AreEqual(0.25f / zoom, field.x - 0.5f, 1e-6f, $"the right offset divides by the zoom at {zoom}");
+                Assert.AreEqual(-0.25f / zoom, field.y - 0.5f, 1e-6f, $"the down offset divides by the zoom at {zoom}");
+                float2 back = WarpFlowMath.ScreenUv(field, zoom);
+                Assert.AreEqual(uv.x, back.x, 1e-6f, $"the pair round-trips the x at zoom {zoom}");
+                Assert.AreEqual(uv.y, back.y, 1e-6f, $"the pair round-trips the y at zoom {zoom}");
+            }
+        }
+
+        [Test]
+        public void ScreenUv_RunsTheVanishingPointOutward_WhenTheViewZoomsIn()
+        {
+            // The head-on view at pitch 30: the point sits 0.173 above center. A
+            // narrower window over the same field puts it at twice the offset at zoom
+            // 2, and off the top of the screen at zoom 4.
+            var point = new float2(0.5f, 0.673f);
+            float2 zoom2 = WarpFlowMath.ScreenUv(point, 2f);
+            Assert.AreEqual(0.5f, zoom2.x, 1e-3f, "zoom 2 moves the point sideways not at all");
+            Assert.AreEqual(0.846f, zoom2.y, 1e-3f, "zoom 2 doubles the offset");
+            float2 zoom4 = WarpFlowMath.ScreenUv(point, 4f);
+            Assert.AreEqual(0.5f, zoom4.x, 1e-3f, "zoom 4 moves the point sideways not at all");
+            Assert.AreEqual(1.192f, zoom4.y, 1e-3f, "zoom 4 puts the point off the top edge");
+            Assert.Greater(zoom4.y, 1f, "the point sits past the top edge of the visible screen at zoom 4");
+            Assert.Less(WarpFlowMath.ScreenUv(point, 0.5f).y, 0.673f, "a zoom-out view pulls the point back toward the center");
+        }
+
+        [Test]
+        public void FieldUv_AnswersFiniteNumbers_WhenTheLevelCollapsesToTheFloor()
+        {
+            foreach (float zoom in new[] { 0f, -1f, 0.01f })
+            {
+                float2 field = WarpFlowMath.FieldUv(new float2(1f, 1f), zoom);
+                Assert.True(math.isfinite(field.x) && math.isfinite(field.y), $"finite field uv at zoom {zoom}");
+                Assert.Greater(field.x, 0f, $"the corner maps outward and not to zero at zoom {zoom}");
+            }
+        }
+
         // The flow clock. The shader reads an accumulated clock, so the streak
         // direction cannot depend on how the rate is changing.
         [Test]
