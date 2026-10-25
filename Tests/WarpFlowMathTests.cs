@@ -374,6 +374,113 @@ namespace PixelEngine.Tests
             Assert.AreEqual(0.0375f, fourth, 1e-6f, "the fed-back chain walks the flow toward zero");
         }
 
+        // The pose rule on the rate. The shader advances the streak pattern by one ray
+        // path per cycle, and the cycle is one over the rate, so the screen sweep is
+        // path x rate. The path grows with the vanishing point's distance off screen,
+        // because it must reach the farthest screen corner, so a side view runs a path
+        // about 2.7 times the head-on path. These tests state that the rate carries
+        // that growth and the sweep does not.
+        [Test]
+        public void SpeedRate_MatchesTheIntensityRate_WhenThePathEqualsTheReference()
+        {
+            float path = 0.989f;
+            for (int i = 0; i <= 5; i++)
+            {
+                float intensity = i * 0.2f;
+                Assert.AreEqual(
+                    WarpFlowMath.FlowRate(AuthoredRate, intensity, 0.25f),
+                    WarpFlowMath.SpeedRate(AuthoredRate, intensity, 0.25f, path, path),
+                    1e-6f, $"intensity {intensity} at the reference path");
+            }
+        }
+
+        [Test]
+        public void SpeedRate_ScalesByThePathRatio_WhenThePathRunsLonger()
+        {
+            const float reference = 0.989f;
+            const float sidePath = 2.700f;
+            float expected = AuthoredRate * reference / sidePath;
+            Assert.AreEqual(expected, WarpFlowMath.SpeedRate(AuthoredRate, 1f, 0f, reference, sidePath), 1e-6f,
+                "full intensity pays the ratio");
+            Assert.AreEqual(expected * 0.5f, WarpFlowMath.SpeedRate(AuthoredRate, 0.5f, 0f, reference, sidePath), 1e-6f,
+                "the intensity scale rides the same number");
+            Assert.AreEqual(0.25f * AuthoredRate * reference / sidePath,
+                WarpFlowMath.SpeedRate(AuthoredRate, 0f, 0.25f, reference, sidePath), 1e-6f,
+                "the floor rides the same number");
+            Assert.AreEqual(0f, WarpFlowMath.SpeedRate(AuthoredRate, 0f, 0f, reference, sidePath), 1e-6f,
+                "a stopped warp stays stopped at any pose");
+        }
+
+        [Test]
+        public void SpeedRate_NeverRunsAPoseFasterThanTheAuthoredRate()
+        {
+            const float reference = 0.989f;
+            foreach (float path in new[] { 0.5f, 0.857f, 0.988f })
+            {
+                Assert.AreEqual(AuthoredRate, WarpFlowMath.SpeedRate(AuthoredRate, 1f, 0f, reference, path), 1e-6f,
+                    $"path {path} shorter than the reference keeps the authored rate");
+            }
+            Assert.LessOrEqual(WarpFlowMath.SpeedRate(AuthoredRate, 2f, 1f, reference, 2.7f), AuthoredRate, "over-range inputs stay under the authored rate");
+        }
+
+        [Test]
+        public void SpeedRate_HoldsOneScreenSweepAcrossThePoseTable()
+        {
+            // The poses the layer runs at, read through the rig's own math.
+            float margin = 0.15f;
+            var poses = new[]
+            {
+                new float3(0f, 0f, -1f),                     // gaze along travel, level
+                new float3(0f, 0.5f, -0.8660254f),           // gaze along travel, pitch 30
+                new float3(-0.7071068f, 0.3535534f, -0.6123724f), // yaw 45, pitch 30
+                new float3(-1f, 0f, 0f),                     // side view
+                new float3(1f, 0f, 0f),                      // mirrored side view
+                new float3(0f, 1f, 0f)                       // nadir
+            };
+            var paths = new float[poses.Length];
+            for (int i = 0; i < poses.Length; i++)
+            {
+                paths[i] = WarpFlowMath.RayPath(VP(poses[i]), margin);
+            }
+            float reference = WarpFlowMath.RayPath(VP(new float3(0f, 0.5f, -0.8660254f)), margin);
+
+            for (int i = 0; i < poses.Length; i++)
+            {
+                float rate = WarpFlowMath.SpeedRate(AuthoredRate, 1f, 0f, reference, paths[i]);
+                float sweep = paths[i] * rate;
+                float cycle = 1f / rate;
+                if (paths[i] >= reference)
+                {
+                    Assert.AreEqual(reference * AuthoredRate, sweep, 1e-4f, $"pose {poses[i]} sweeps the reference distance per second");
+                    Assert.AreEqual(paths[i] / (reference * AuthoredRate), cycle, 1e-2f, $"pose {poses[i]} spends its extra path on the cycle");
+                }
+                else
+                {
+                    Assert.AreEqual(AuthoredRate, rate, 1e-6f, $"pose {poses[i]} keeps the authored rate");
+                    Assert.Less(sweep, reference * AuthoredRate + 1e-4f, $"pose {poses[i]} sweeps less, and never more");
+                }
+            }
+        }
+
+        [Test]
+        public void SpeedRate_ScalesTheRateAndKeepsThePathThatTheFarFadeNeeds()
+        {
+            // The ray path does two jobs: it reaches the farthest screen corner so the
+            // far fade covers the view, and it sets the cycle length. The rule scales
+            // the rate and leaves the path whole, so the coverage rule keeps standing.
+            float2 vp = new float2(-1.5f, 0.5f);   // side view
+            float path = WarpFlowMath.RayPath(vp, 0.15f);
+            float farFadeRate = 3f;
+            foreach (int i in new[] { 0, 1, 2, 3 })
+            {
+                var corner = new float2(i % 2, i / 2);
+                float fade = math.saturate((path - math.length(vp - corner)) * farFadeRate);
+                Assert.Greater(fade, 0f, $"corner {corner} stays inside the far fade at the scaled rate");
+            }
+            Assert.Greater(WarpFlowMath.SpeedRate(AuthoredRate, 1f, 0f, 0.989f, path), 0f, "the pose still runs");
+            Assert.AreEqual(path, WarpFlowMath.RayPath(vp, 0.15f), 0f, "the path the fade reads is the path the rate divides by");
+        }
+
         // The flow clock. The shader reads an accumulated clock, so the streak
         // direction cannot depend on how the rate is changing.
         [Test]

@@ -141,6 +141,33 @@ namespace PixelEngine.Presentation
             return authoredRate * (floor + (1f - floor) * clamped);
         }
 
+        /// <summary>The flow rate one pose writes: the intensity-scaled rate, slowed
+        /// when that pose's ray path runs longer than the speed reference.
+        ///
+        /// The shader advances the streak pattern by one ray path per cycle, and the
+        /// cycle is one over the flow rate, so the on-screen sweep is path times
+        /// rate. The ray path grows with the vanishing point's distance off screen,
+        /// because the path must reach the farthest screen corner for the far fade
+        /// to cover the view. Left alone, that coverage rule sets the speed too: a
+        /// side view, whose point sits two screen widths off center, sweeps about
+        /// three times as fast as a head-on view at the same authored rate.
+        ///
+        /// The reference names the path length the authored rate is tuned at. A pose
+        /// whose path runs longer writes rate x reference / path, which lands the
+        /// sweep at the same screen speed and lengthens that pose's cycle. A pose
+        /// whose path runs shorter keeps the authored rate, so the authored Flow
+        /// Rate stays the fastest the layer runs and the shortest cycle it has.
+        ///
+        /// The scaling divides the rate and never the path: the path keeps its full
+        /// length, so the far fade keeps covering the corner it was written for.</summary>
+        public static float SpeedRate(float authoredRate, float intensity, float floorFraction,
+            float referencePath, float path)
+        {
+            float rate = FlowRate(authoredRate, intensity, floorFraction);
+            float shrink = referencePath / math.max(path, 0.01f);
+            return rate * math.min(shrink, 1f);
+        }
+
         /// <summary>The flow clock advance one frame buys: the rate times the
         /// elapsed time, with the elapsed time capped at <c>stepCapSeconds</c>.
         /// The cap is what a stalled frame, a tab-out, or a debugger pause
@@ -189,7 +216,11 @@ namespace PixelEngine.Presentation
     /// path and the streak count scale with the vanishing point distance:
     /// the side and nadir views land the point off screen, and the visible
     /// screen then starts at a larger distance, so a fixed path would put
-    /// every visible pixel past the far fade. The look parameters — the full
+    /// every visible pixel past the far fade. That same growth sets the sweep
+    /// speed, because the pattern advances one ray path per cycle, so the rate
+    /// scales down by the ratio past the component's speed reference: the streaks
+    /// sweep the screen at one speed at every pose, and a long-path pose lengthens
+    /// its cycle instead of running faster. The look parameters — the full
     /// flow rate, bands, color — are authored on the material, and
     /// the per-pose values write onto a play-mode clone of it, so the
     /// authored asset never carries the runtime answer. Unity 6.6's
@@ -236,6 +267,8 @@ namespace PixelEngine.Presentation
         [SerializeField, Range(0f, 1f)] private float flowRateFloor = 0f;
         [Tooltip("The largest elapsed time one frame may add to the flow clock, in seconds. A stalled frame, a tab-out, or a paused debugger reports a large elapsed time; the cap makes that a skip and not a jump.")]
         [SerializeField, Min(0.001f)] private float flowStepCapSeconds = 0.1f;
+        [Tooltip("The ray path the authored Flow Rate sweeps at, in UV. The streak pattern advances one ray path per cycle, so a pose whose path runs longer than this writes a slower rate and keeps the same screen speed, and its cycle lengthens. A pose with a shorter path keeps the authored rate, so the authored Flow Rate is the fastest the layer runs. Set it to the path of the view the look was tuned at: the head-on view at the authored pitch.")]
+        [SerializeField, Min(0.01f)] private float speedReferencePath = 0.99f;
 
         private Material runtimeMaterial;
         private RenderTexture warpTexture;
@@ -362,7 +395,11 @@ namespace PixelEngine.Presentation
             // rate at full warp, and the same number drives brightness, so the
             // layer's speed and its strength move together. _FlowRate carries the
             // rate the rig is running at, which is the number a live read checks.
-            float rate = WarpFlowMath.FlowRate(authoredFlowRate, intensity, flowRateFloor);
+            // The pose rule sits on the same number: a pose whose ray path runs
+            // longer than the speed reference writes a proportionally slower rate,
+            // so the streaks sweep the screen at one speed at every pose and the
+            // cycle lengthens instead of the speed growing.
+            float rate = WarpFlowMath.SpeedRate(authoredFlowRate, intensity, flowRateFloor, speedReferencePath, path);
             if (flowRateReadable)
             {
                 runtimeMaterial.SetFloat("_FlowRate", rate);
