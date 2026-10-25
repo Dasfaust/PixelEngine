@@ -211,9 +211,10 @@ namespace PixelEngine.Presentation
         /// <summary>The screen direction the stars flow during a warp, from the travel vector the warp
         /// layer reads. The travel arrives in view space, where x is screen right and y is screen up, so
         /// the direction needs no camera axes and no authored angle: it is the travel's own screen
-        /// components, taken against the travel, because the stars run opposite the streaks. A travel
-        /// with no screen component answers no direction, which is the level look where a warp carries
-        /// the sky along the view axis and nothing across the screen.</summary>
+        /// components, along the travel, which is the direction the look settled on — the stars run with
+        /// the warp travel across the screen. A travel with no screen component answers no direction,
+        /// which is the level look where a warp carries the sky along the view axis and nothing across
+        /// the screen.</summary>
         public static float2 WarpFlowDirection(float3 viewTravel)
         {
             float2 screen = new float2(viewTravel.x, viewTravel.y);
@@ -222,7 +223,7 @@ namespace PixelEngine.Presentation
             {
                 return float2.zero;
             }
-            return -screen / length;
+            return screen / length;
         }
 
         /// <summary>The flow speed in pattern cells per second: one pattern width per second at a full
@@ -316,8 +317,9 @@ namespace PixelEngine.Presentation
         [SerializeField, Range(0f, 4f)]
         [Tooltip("The star flow's speed multiplier over the warp intensity. One pattern width per second " +
                  "at a full intensity and a speed of 1, so 2 doubles the flow and 0 stops it. The stars " +
-                 "run opposite the warp streaks at every view angle, and the direction comes from the " +
-                 "warp layer's own travel vector.")]
+                 "run along the warp travel at every view angle, and the direction comes from the warp " +
+                 "layer's own travel vector. A negative authored value is not a direction lever: the " +
+                 "rate clamps it to zero.")]
         private float warpFlowSpeed = 1f;
 
         [SerializeField, Range(0f, 4f)]

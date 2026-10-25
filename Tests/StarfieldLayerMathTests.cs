@@ -634,22 +634,22 @@ namespace PixelEngine.Tests
         // --- The warp flow runs the stars against the streaks ---
 
         [Test]
-        public void TheWarpFlowDirectionRunsAgainstTheTravelOnScreen()
+        public void TheWarpFlowDirectionRunsAlongTheTravelOnScreen()
         {
             // The travel vector arrives in view space, where x is screen right and y is screen up, so
-            // the direction is the travel's own screen components taken against it. The forward
-            // component is the view axis and carries no screen direction, so it drops out and the
-            // result is a unit vector: the stars run one pattern width per second at any travel angle.
+            // the direction is the travel's own screen components. The forward component is the view
+            // axis and carries no screen direction, so it drops out and the result is a unit vector:
+            // the stars run along the travel at any travel angle, and the look settled the sign.
             float3 forwardDown = new float3(0f, 0.5f, -0.866f);
-            float2 away = StarfieldLayerMath.WarpFlowDirection(forwardDown);
-            Assert.AreEqual(-0f, away.x, 1e-3f);
-            Assert.AreEqual(-1f, away.y, 1e-3f);
-            Assert.AreEqual(1f, math.length(away), 1e-4f);
+            float2 along = StarfieldLayerMath.WarpFlowDirection(forwardDown);
+            Assert.AreEqual(0f, along.x, 1e-3f);
+            Assert.AreEqual(1f, along.y, 1e-3f);
+            Assert.AreEqual(1f, math.length(along), 1e-4f);
 
             float3 yawed = new float3(0.5f, 0.5f, -0.707f);
             float2 angled = StarfieldLayerMath.WarpFlowDirection(yawed);
-            Assert.AreEqual(-0.7071f, angled.x, 1e-3f);
-            Assert.AreEqual(-0.7071f, angled.y, 1e-3f);
+            Assert.AreEqual(0.7071f, angled.x, 1e-3f);
+            Assert.AreEqual(0.7071f, angled.y, 1e-3f);
             Assert.AreEqual(1f, math.length(angled), 1e-4f);
         }
 
@@ -722,7 +722,7 @@ namespace PixelEngine.Tests
                     if (math.length(new float2(travel.x, travel.y)) > 0.0001f)
                     {
                         Assert.AreEqual(1f, math.length(direction), 1e-3f, "yaw " + yaw + " pitch " + pitchDeg);
-                        Assert.Greater(0f, direction.y, "yaw " + yaw + " pitch " + pitchDeg);
+                        Assert.Greater(direction.y, 0f, "yaw " + yaw + " pitch " + pitchDeg);
                     }
                     Assert.AreEqual(0f, math.length(forwardView), 1f);
                 }
