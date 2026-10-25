@@ -151,6 +151,56 @@ namespace PixelEngine.Tests
             Assert.GreaterOrEqual(grid.y, 1f);
         }
 
+        [Test]
+        public void ThePatternCellsCarryTheAuthoredWidthAndTheLayerAspect()
+        {
+            // The pattern's own cell count is the authored width across, and the down count follows
+            // the layer aspect. The layer's ratio is the answer, because a cell that is square on
+            // screen has to answer the layer's width over its height.
+            float2 pattern = StarfieldLayerMath.PatternCells(CellsWide, Aspect);
+            Assert.AreEqual(CellsWide, pattern.x, 1e-5f);
+            Assert.AreEqual(CellsWide / Aspect, pattern.y, 1e-5f);
+            Assert.AreEqual(Aspect, pattern.x / pattern.y, 1e-4f);
+        }
+
+        [Test]
+        public void ThePatternCellsCarryNoZoom()
+        {
+            // The pattern's count names the pattern, and the zoom names what the screen shows of it.
+            // A pattern count that carried the zoom would move the pattern's center and its wrap
+            // period every time the camera zoomed, and the field would step under the zoom move.
+            float2 square = StarfieldLayerMath.PatternCells(CellsWide, 1f);
+            float2 wide = StarfieldLayerMath.PatternCells(CellsWide, 4f);
+            Assert.AreEqual(CellsWide, square.x, 1e-5f);
+            Assert.AreEqual(CellsWide, wide.x, 1e-5f);
+            Assert.AreEqual(CellsWide, square.y, 1e-5f);
+            Assert.AreEqual(CellsWide / 4f, wide.y, 1e-5f);
+        }
+
+        [Test]
+        public void TheVisibleCountIsThePatternCountDividedByTheScale()
+        {
+            // The two counts the rig answers are one rule read two ways: the pattern's count at the
+            // live scale is the count the screen shows. A pair that disagreed would put the center
+            // offset and the magnification on different numbers, and the zoom would anchor off center.
+            const float scale = 2.5f;
+            float2 pattern = StarfieldLayerMath.PatternCells(CellsWide, Aspect);
+            float2 visible = StarfieldLayerMath.LatticeCount(CellsWide, scale, Aspect);
+            Assert.AreEqual(pattern.x / scale, visible.x, 1e-5f);
+            Assert.AreEqual(pattern.y / scale, visible.y, 1e-5f);
+        }
+
+        [Test]
+        public void ThePatternCellsFloorAtOneCell()
+        {
+            // A layer so wide that the authored field cannot fill it answers no whole cell down, and
+            // a pattern with no whole cell has no center and no wrap period. The floor keeps one cell
+            // on both axes.
+            float2 pattern = StarfieldLayerMath.PatternCells(1f, 1000f);
+            Assert.GreaterOrEqual(pattern.x, 1f);
+            Assert.GreaterOrEqual(pattern.y, 1f);
+        }
+
         // --- Star dot radius ---
 
         [Test]

@@ -60,10 +60,26 @@ namespace PixelEngine.Presentation
             return 1f + (math.max(uvZoom, 1f) - 1f) * zoomParallaxFactor;
         }
 
-        /// <summary>The lattice cell count at a pattern scale: the authored width divides by the
-        /// scale, and the height follows the layer aspect. The floor holds one whole cell on both
-        /// axes, so an extreme scale answers a big star field and not an empty sky. The count is the
-        /// lattice's wrap period, which carries a slide through the pattern edge with no seam.</summary>
+        /// <summary>The authored pattern's cell count: the authored width across, and the height that
+        /// follows the layer aspect. The count carries no zoom, and that is the rule it exists for. The
+        /// pattern repeats at its own width, so the wrap period and the pattern center hold at every
+        /// zoom, and the ratio between the two axes is the layer's ratio, which is what keeps a cell
+        /// square in screen pixels. A count derived from the visible count would round on its own
+        /// boundaries, and the answer is a star field that stretches and steps while the camera zooms.
+        /// The floor holds one whole cell on both axes.</summary>
+        public static float2 PatternCells(float cellsWide, float layerAspect)
+        {
+            float wide = math.max(cellsWide, 1f);
+            float tall = math.max(wide / math.max(layerAspect, 0.0001f), 1f);
+            return new float2(wide, tall);
+        }
+
+        /// <summary>The cell count the screen shows at a pattern scale: the authored width divides by the
+        /// scale, and the height follows the layer aspect. This is the pattern's count at the live zoom,
+        /// so dividing the pattern's count by the scale answers the same numbers. The floor holds one
+        /// whole cell on both axes, so an extreme scale answers a big star field and not an empty sky.
+        /// The dot radius reads this count, because the authored pixel size divides by this cell's pixel
+        /// width.</summary>
         public static float2 LatticeCount(float cellsWide, float patternScale, float layerAspect)
         {
             float wide = math.max(cellsWide / math.max(patternScale, 0.0001f), 1f);
@@ -184,6 +200,11 @@ namespace PixelEngine.Presentation
 
         /// <summary>The lattice cell count the layer answered on the last apply.</summary>
         public Vector2 AnsweredLatticeCount { get; private set; } = Vector2.zero;
+
+        /// <summary>The pattern cell count the rig wrote: the authored width across and the height that
+        /// follows the layer aspect. The number carries no zoom, so the pattern's center and its wrap
+        /// period hold at every zoom.</summary>
+        public Vector2 AnsweredPatternCells { get; private set; } = Vector2.zero;
 
         /// <summary>A star dot's radius in lattice cells on the last apply.</summary>
         public float AnsweredDotRadiusCells { get; private set; }
@@ -413,10 +434,12 @@ namespace PixelEngine.Presentation
             float uvZoom = parentCamera != null ? parentCamera.GetUVZoomLevel() : 1f;
             float patternScale = StarfieldLayerMath.PatternScale(uvZoom, zoomParallaxFactor);
             float2 lattice = StarfieldLayerMath.LatticeCount(authoredCellsWide, patternScale, aspect);
+            float2 pattern = StarfieldLayerMath.PatternCells(authoredCellsWide, aspect);
 
             AnsweredSlideCells = StarfieldLayerMath.SlideCells(pose, authoredCellsWide, parallaxFactor);
             AnsweredPatternScale = patternScale;
             AnsweredLatticeCount = new Vector2(lattice.x, lattice.y);
+            AnsweredPatternCells = new Vector2(pattern.x, pattern.y);
             AnsweredDotRadiusCells = StarfieldLayerMath.DotRadiusCells(authoredStarSizePixels, layerWidth,
                 authoredCellsWide, patternScale, authoredDotZoomFactor);
             AnsweredOpacity = StarfieldLayerMath.LayerOpacity(baseOpacity, nadirFade);
@@ -425,7 +448,7 @@ namespace PixelEngine.Presentation
 
             runtimeMaterial.SetVector("_Slide", new Vector4(AnsweredSlideCells, 0f, 0f, 0f));
             runtimeMaterial.SetFloat("_ZoomScale", AnsweredPatternScale);
-            runtimeMaterial.SetVector("_LatticeCount", new Vector4(AnsweredLatticeCount.x, AnsweredLatticeCount.y, 0f, 0f));
+            runtimeMaterial.SetVector("_PatternCells", new Vector4(AnsweredPatternCells.x, AnsweredPatternCells.y, 0f, 0f));
             runtimeMaterial.SetFloat("_DotRadiusCells", AnsweredDotRadiusCells);
             runtimeMaterial.SetFloat("_RollAngle", AnsweredRollDegrees);
             runtimeMaterial.SetFloat("_LayerAspect", aspect);
