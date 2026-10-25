@@ -208,6 +208,41 @@ namespace PixelEngine.Presentation
                 -1f, 1f)));
         }
 
+        /// <summary>The screen direction the stars flow during a warp, from the travel vector the warp
+        /// layer reads. The travel arrives in view space, where x is screen right and y is screen up, so
+        /// the direction needs no camera axes and no authored angle: it is the travel's own screen
+        /// components, taken against the travel, because the stars run opposite the streaks. A travel
+        /// with no screen component answers no direction, which is the level look where a warp carries
+        /// the sky along the view axis and nothing across the screen.</summary>
+        public static float2 WarpFlowDirection(float3 viewTravel)
+        {
+            float2 screen = new float2(viewTravel.x, viewTravel.y);
+            float length = math.length(screen);
+            if (length < 0.0001f)
+            {
+                return float2.zero;
+            }
+            return -screen / length;
+        }
+
+        /// <summary>The flow speed in pattern cells per second: one pattern width per second at a full
+        /// intensity and a speed of 1, so the speed knob multiplies the warp intensity and nothing else
+        /// moves. Intensity is clamped first, so an over-range caller cannot speed the sky past the
+        /// authored rate, and a stopped warp carries no star flow at all.</summary>
+        public static float WarpFlowRateCells(float patternCellsWide, float intensity, float flowSpeed)
+        {
+            return patternCellsWide * math.clamp(intensity, 0f, 1f) * math.max(flowSpeed, 0f);
+        }
+
+        /// <summary>A cell distance folded into one pattern period. The warp flow accumulates every
+        /// frame, and a long warp would grow the number without bound; the pattern repeats at its own
+        /// width, so folding at the period answers the same screen at every fold.</summary>
+        public static float WrapCells(float cells, float patternCells)
+        {
+            float period = math.max(patternCells, 1f);
+            return cells - math.floor(cells / period) * period;
+        }
+
         /// <summary>The fade weight the layer's visibility reads. The lag pushes the visibility ramp
         /// back along the cross-fade, so the field stays dim through the near side of the tilt and
         /// brightens as the camera closes on top-down. The roll reads the fade ahead of this number,
@@ -279,6 +314,13 @@ namespace PixelEngine.Presentation
         private float pitchBaseDegrees = 30f;
 
         [SerializeField, Range(0f, 4f)]
+        [Tooltip("The star flow's speed multiplier over the warp intensity. One pattern width per second " +
+                 "at a full intensity and a speed of 1, so 2 doubles the flow and 0 stops it. The stars " +
+                 "run opposite the warp streaks at every view angle, and the direction comes from the " +
+                 "warp layer's own travel vector.")]
+        private float warpFlowSpeed = 1f;
+
+        [SerializeField, Range(0f, 4f)]
         [Tooltip("How far the pitch tilt slides the sky, in the same currency as the yaw slide: 1 carries " +
                  "45 degrees of tilt one pattern width, so the tilt from the isometric notch to top-down " +
                  "carries 1.333 widths. 0 leaves the sky standing while the camera tips.")]
@@ -333,6 +375,12 @@ namespace PixelEngine.Presentation
         /// <summary>The camera tilt the rig read, in degrees.</summary>
         public float AnsweredPitchDegrees { get; private set; }
 
+        /// <summary>The warp flow's share of the slide, in pattern cells.</summary>
+        public Vector2 AnsweredWarpFlowCells { get; private set; }
+
+        /// <summary>The warp flow's speed, in pattern cells per second.</summary>
+        public float AnsweredWarpFlowRateCells { get; private set; }
+
         /// <summary>The pattern scale the layer answered on the last apply.</summary>
         public float AnsweredPatternScale { get; private set; } = 1f;
 
@@ -385,6 +433,22 @@ namespace PixelEngine.Presentation
 
         /// <summary>How far the pitch tilt slides the sky.</summary>
         public float PitchSlideParallax => pitchSlideParallax;
+
+        /// <summary>The star flow's speed multiplier over the warp intensity.</summary>
+        public float WarpFlowSpeed => warpFlowSpeed;
+
+        private Vector3 warpTravel;
+        private float warpIntensity;
+        private float2 warpFlowCells;
+
+        /// <summary>The warp layer's travel vector and intensity, read every frame the warp layer reads
+        /// them. The travel is in view space, where x is screen right and y is screen up, so the star
+        /// flow needs no camera axes and no authored angle to run opposite the streaks.</summary>
+        public void SetWarpFlow(Vector3 viewTravel, float intensity)
+        {
+            warpTravel = viewTravel;
+            warpIntensity = intensity;
+        }
 
         private void Awake()
         {
@@ -653,8 +717,22 @@ namespace PixelEngine.Presentation
                 rollLead);
             AnsweredLayerSize = new Vector2(layerWidth, layerHeight);
 
-            runtimeMaterial.SetVector("_Slide", new Vector4(AnsweredSlideCells + panSlide.x,
-                panSlide.y + pitchSlide, 0f, 0f));
+            // The warp flow is a rate, not a position, so it accumulates. The warp layer reads its
+            // travel every frame, and the star layer folds the accumulated cells into the pattern
+            // period so a long warp keeps a bounded number and the same screen.
+            float2 flowDirection = StarfieldLayerMath.WarpFlowDirection(warpTravel);
+            float flowRate = StarfieldLayerMath.WarpFlowRateCells(authoredCellsWide, warpIntensity,
+                warpFlowSpeed);
+            float seconds = UnityEngine.Application.isPlaying ? UnityEngine.Time.deltaTime : 0f;
+            warpFlowCells += flowDirection * flowRate * seconds;
+            warpFlowCells = new float2(
+                StarfieldLayerMath.WrapCells(warpFlowCells.x, pattern.x),
+                StarfieldLayerMath.WrapCells(warpFlowCells.y, pattern.y));
+            AnsweredWarpFlowCells = new Vector2(warpFlowCells.x, warpFlowCells.y);
+            AnsweredWarpFlowRateCells = flowRate;
+
+            runtimeMaterial.SetVector("_Slide", new Vector4(AnsweredSlideCells + panSlide.x + warpFlowCells.x,
+                panSlide.y + pitchSlide + warpFlowCells.y, 0f, 0f));
             runtimeMaterial.SetFloat("_ZoomScale", AnsweredPatternScale);
             runtimeMaterial.SetVector("_PatternCells", new Vector4(AnsweredPatternCells.x, AnsweredPatternCells.y, 0f, 0f));
             runtimeMaterial.SetFloat("_DotRadiusCells", AnsweredDotRadiusCells);
