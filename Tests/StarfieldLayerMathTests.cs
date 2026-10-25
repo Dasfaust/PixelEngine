@@ -550,5 +550,85 @@ namespace PixelEngine.Tests
             Assert.AreEqual(baseAlpha,
                 StarfieldLayerMath.LayerOpacity(baseAlpha, StarfieldLayerMath.FadeWeight(0f, 0.6f)), 1e-5f);
         }
+
+        // --- The pitch tilt slides the sky ---
+
+        [Test]
+        public void ATiltAtTheBaseNotchCarriesNoPitchSlide()
+        {
+            // The isometric landing is where the slide starts, so the camera sitting at its base notch
+            // writes no pitch term and the isometric view keeps its yaw and pan travel whole.
+            Assert.AreEqual(0f, StarfieldLayerMath.PitchSlideCells(30f, 30f, 96f, 1f), 1e-6f);
+            Assert.AreEqual(0f, StarfieldLayerMath.PitchSlideCells(0f, 30f, 96f, 1f), 1e-6f);
+            Assert.AreEqual(0f, StarfieldLayerMath.PitchSlideCells(29.999f, 30f, 96f, 4f), 1e-5f);
+        }
+
+        [Test]
+        public void TheTiltFromTheIsometricNotchToTopDownCarriesOneAndAThirdPatternWidths()
+        {
+            // The shipped pair of notches is 30 and 90 degrees: 60 degrees of tilt, which at the yaw
+            // currency is 1.333 pattern widths, the same travel a 60-degree yaw step asks of the sky.
+            Assert.AreEqual(128f, StarfieldLayerMath.PitchSlideCells(90f, 30f, 96f, 1f), 1e-4f);
+        }
+
+        [Test]
+        public void ThePitchSlideAndTheYawSlideShareOneCurrency()
+        {
+            // The rule that makes one number cover both axes: a 45-degree tilt and a 45-degree yaw step
+            // answer the same travel, one pattern width at a factor of 1, and half a turn answers half
+            // the travel on both.
+            float yawTravel = StarfieldLayerMath.SlideCells(1f, 96f, 1f);
+            float pitchTravel = StarfieldLayerMath.PitchSlideCells(75f, 30f, 96f, 1f);
+            Assert.AreEqual(yawTravel, pitchTravel, 1e-4f);
+            Assert.AreEqual(96f, pitchTravel, 1e-4f);
+            Assert.AreEqual(48f, StarfieldLayerMath.PitchSlideCells(52.5f, 30f, 96f, 1f), 1e-4f);
+        }
+
+        [Test]
+        public void ThePitchSlideParallaxScalesTheTiltTravel()
+        {
+            Assert.AreEqual(64f, StarfieldLayerMath.PitchSlideCells(90f, 30f, 96f, 0.5f), 1e-4f);
+            Assert.AreEqual(0f, StarfieldLayerMath.PitchSlideCells(90f, 30f, 96f, 0f), 1e-6f);
+            Assert.AreEqual(256f, StarfieldLayerMath.PitchSlideCells(90f, 30f, 96f, 2f), 1e-4f);
+        }
+
+        [Test]
+        public void ThePitchReadIsTheTiltOfTheViewDirectionAtAnyYaw()
+        {
+            // The tilt is read from where the camera looks, so the yaw cannot change it: straight down
+            // reads 90 at any yaw, and the isometric tilt reads 30 at any yaw. A level camera reads 0,
+            // and the read never wraps, which is what an euler angle would do at a yaw past 180.
+            float down = StarfieldLayerMath.PitchDegrees(new float3(0f, -1f, 0f));
+            Assert.AreEqual(90f, down, 1e-4f);
+            for (float yaw = 0f; yaw < 360f; yaw += 45f)
+            {
+                float rad = math.radians(yaw);
+                float3 iso = math.normalize(new float3(math.sin(rad) * math.cos(math.radians(30f)),
+                    -math.sin(math.radians(30f)), math.cos(rad) * math.cos(math.radians(30f))));
+                Assert.AreEqual(30f, StarfieldLayerMath.PitchDegrees(iso), 1e-4f);
+                float3 nadir = math.normalize(new float3(math.sin(rad) * math.cos(math.radians(90f)),
+                    -math.sin(math.radians(90f)), math.cos(rad) * math.cos(math.radians(90f))));
+                Assert.AreEqual(90f, StarfieldLayerMath.PitchDegrees(nadir), 1e-3f);
+            }
+            Assert.AreEqual(0f, StarfieldLayerMath.PitchDegrees(new float3(0f, 0f, 1f)), 1e-5f);
+            Assert.AreEqual(-20f, StarfieldLayerMath.PitchDegrees(math.normalize(new float3(0f, 0.342f, 0.94f))),
+                1e-2f);
+        }
+
+        [Test]
+        public void ThePitchSlideLandsWithTheRollAtTopDown()
+        {
+            // The slide lands in the pattern's frame, and the roll is whole at the top-down landing, so
+            // the travel the tilt wrote reads turned by the camera's angle at the landing. The pair is
+            // the shape the look asked for: the field moves down the screen at the camera's angle.
+            float slide = StarfieldLayerMath.PitchSlideCells(90f, 30f, 96f, 1f);
+            float roll = StarfieldLayerMath.RollDegrees(-45f, 1f, 1f, 2f);
+            Assert.AreEqual(128f, slide, 1e-4f);
+            Assert.AreEqual(-45f, roll, 1e-4f);
+            float rad = math.radians(roll);
+            float2 turned = new float2(slide * math.sin(rad), slide * math.cos(rad));
+            Assert.Greater(math.length(turned), 127f);
+            Assert.AreEqual(0f, math.abs(turned.x) - math.abs(turned.y), 1e-3f);
+        }
     }
 }

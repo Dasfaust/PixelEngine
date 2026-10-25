@@ -185,6 +185,29 @@ namespace PixelEngine.Presentation
             return RollDegrees(yawDegrees, rollSign, math.clamp(nadirFade * lead, 0f, 1f));
         }
 
+        /// <summary>The pitch travel's slide in pattern cells. The sky answers a pitch step the way it
+        /// answers a yaw step: 45 degrees of camera rotation carries the field one pattern width at a
+        /// factor of 1, so the 60-degree tilt from the isometric notch to top-down carries it 1.333
+        /// widths, and a pitch at or below the base notch answers no slide. The sign moves the field down
+        /// the screen, which is the direction the world content travels as the camera tips to top-down,
+        /// and the slide lands in the pattern's own frame, so the nadir roll turns its direction to the
+        /// camera's angle.</summary>
+        public static float PitchSlideCells(float pitchDegrees, float basePitchDegrees, float cellsWide,
+            float pitchParallaxFactor)
+        {
+            float turn = math.max(pitchDegrees - basePitchDegrees, 0f);
+            return turn * (1f / 45f) * cellsWide * pitchParallaxFactor;
+        }
+
+        /// <summary>The camera's tilt in degrees, read from the view direction. A camera pointing
+        /// straight down reads 90 and a level camera reads 0, and the number carries every yaw, so no
+        /// authored angle and no euler wrap is involved.</summary>
+        public static float PitchDegrees(float3 viewForward)
+        {
+            return math.degrees(math.asin(math.clamp(-math.dot(viewForward, math.normalize(new float3(0f, 1f, 0f))),
+                -1f, 1f)));
+        }
+
         /// <summary>The fade weight the layer's visibility reads. The lag pushes the visibility ramp
         /// back along the cross-fade, so the field stays dim through the near side of the tilt and
         /// brightens as the camera closes on top-down. The roll reads the fade ahead of this number,
@@ -249,6 +272,17 @@ namespace PixelEngine.Presentation
         [SerializeField, Range(0f, 1f)] private float pitchTransitionDip = 1f;
         [Tooltip("The layer alpha with no nadir fade. The field reaches full alpha at a full fade for any value here, so the top-down view keeps its crisp stars.")]
         [SerializeField, Range(0f, 1f)] private float baseOpacity = 1f;
+
+        [SerializeField, Range(0f, 90f)]
+        [Tooltip("The tilt the pitch slide starts from, matching the camera's isometric notch. The slide " +
+                 "measures pitch above this number, so the isometric landing carries no pitch term.")]
+        private float pitchBaseDegrees = 30f;
+
+        [SerializeField, Range(0f, 4f)]
+        [Tooltip("How far the pitch tilt slides the sky, in the same currency as the yaw slide: 1 carries " +
+                 "45 degrees of tilt one pattern width, so the tilt from the isometric notch to top-down " +
+                 "carries 1.333 widths. 0 leaves the sky standing while the camera tips.")]
+        private float pitchSlideParallax = 1f;
         [Tooltip("Roll direction. 1 rolls the pattern with the camera yaw, -1 against it. The look pass picks the sign that carries the stars with the world content.")]
         [SerializeField, Range(-1f, 1f)] private float rollSign = 1f;
 
@@ -292,6 +326,12 @@ namespace PixelEngine.Presentation
         /// up the screen. The yaw slide answers separately as <see cref="AnsweredSlideCells"/>, and the
         /// layer writes the sum to the material.</summary>
         public Vector2 AnsweredPanSlideCells { get; private set; }
+
+        /// <summary>The pitch tilt's share of the slide, in pattern cells.</summary>
+        public float AnsweredPitchSlideCells { get; private set; }
+
+        /// <summary>The camera tilt the rig read, in degrees.</summary>
+        public float AnsweredPitchDegrees { get; private set; }
 
         /// <summary>The pattern scale the layer answered on the last apply.</summary>
         public float AnsweredPatternScale { get; private set; } = 1f;
@@ -339,6 +379,12 @@ namespace PixelEngine.Presentation
 
         /// <summary>How far back along the cross-fade the layer's visibility sits.</summary>
         public float FadeLag => fadeLag;
+
+        /// <summary>The tilt the pitch slide starts from.</summary>
+        public float PitchBaseDegrees => pitchBaseDegrees;
+
+        /// <summary>How far the pitch tilt slides the sky.</summary>
+        public float PitchSlideParallax => pitchSlideParallax;
 
         private void Awake()
         {
@@ -588,6 +634,17 @@ namespace PixelEngine.Presentation
                 patternScale, panParallaxFactor);
             AnsweredPanSlideCells = new Vector2(panSlide.x, panSlide.y);
 
+            // The pitch tilt slides the sky, and the slide is the same channel the yaw and the pan write.
+            // A pitch step and a yaw step are the same rotation of the camera, so the sky answers them
+            // with the same travel, and the direction comes from the camera's own axes: the tilt lands
+            // the field down the screen at the camera's angle, at every yaw notch.
+            float pitchDegrees = view != null ? StarfieldLayerMath.PitchDegrees(view.transform.forward)
+                : pitchBaseDegrees;
+            float pitchSlide = StarfieldLayerMath.PitchSlideCells(pitchDegrees, pitchBaseDegrees,
+                authoredCellsWide, pitchSlideParallax);
+            AnsweredPitchDegrees = pitchDegrees;
+            AnsweredPitchSlideCells = pitchSlide;
+
             AnsweredDotRadiusCells = StarfieldLayerMath.DotRadiusCells(authoredStarSizePixels, layerWidth,
                 authoredCellsWide, patternScale, authoredDotZoomFactor);
             AnsweredOpacity = StarfieldLayerMath.LayerOpacity(baseOpacity,
@@ -596,7 +653,8 @@ namespace PixelEngine.Presentation
                 rollLead);
             AnsweredLayerSize = new Vector2(layerWidth, layerHeight);
 
-            runtimeMaterial.SetVector("_Slide", new Vector4(AnsweredSlideCells + panSlide.x, panSlide.y, 0f, 0f));
+            runtimeMaterial.SetVector("_Slide", new Vector4(AnsweredSlideCells + panSlide.x,
+                panSlide.y + pitchSlide, 0f, 0f));
             runtimeMaterial.SetFloat("_ZoomScale", AnsweredPatternScale);
             runtimeMaterial.SetVector("_PatternCells", new Vector4(AnsweredPatternCells.x, AnsweredPatternCells.y, 0f, 0f));
             runtimeMaterial.SetFloat("_DotRadiusCells", AnsweredDotRadiusCells);
