@@ -109,12 +109,39 @@ namespace PixelEngine.Presentation
             _SubPixelOffset.x = (remX * cameraConfig.backgroundPixelsPerUnit) / renderWidth;
             _SubPixelOffset.y = (remY * cameraConfig.backgroundPixelsPerUnit) / renderHeight;
 
-            if (viewportMaterial != null)
+            var target = ResolveViewportMaterial();
+            if (target != null)
             {
-                viewportMaterial.SetVector("_SubPixelOffset", _SubPixelOffset);
-                viewportMaterial.SetFloat("_ZoomLevel", 1.0f + (parentCamera.GetUVZoomLevel() * cameraConfig.backgroundParallaxModifier));
-                viewportMaterial.SetFloat("_EdgeMargin", SubpixelCameraBase.EdgeMarginTexels);
+                target.SetVector("_SubPixelOffset", _SubPixelOffset);
+                target.SetFloat("_ZoomLevel", 1.0f + (parentCamera.GetUVZoomLevel() * cameraConfig.backgroundParallaxModifier));
+                target.SetFloat("_EdgeMargin", SubpixelCameraBase.EdgeMarginTexels);
             }
+        }
+
+        /// <summary>
+        /// The material this camera writes and its `RawImage` samples: a runtime copy of the authored
+        /// viewport material (see <see cref="ViewportMaterialRuntime"/>). The authored asset is never
+        /// written, and Edit Mode answers null so an edit-time pass writes nothing.
+        /// </summary>
+        private Material ResolveViewportMaterial()
+        {
+            if (viewportMaterial == null || !Application.isPlaying)
+            {
+                return null;
+            }
+
+            var copy = ViewportMaterialRuntime.Acquire(viewportMaterial);
+            if (outputImage != null && outputImage.material != copy)
+            {
+                outputImage.material = copy;
+            }
+
+            return copy;
+        }
+
+        private void OnDestroy()
+        {
+            ViewportMaterialRuntime.Release(viewportMaterial);
         }
         
         public void Update()

@@ -230,12 +230,53 @@ namespace PixelEngine.Presentation
         /// </summary>
         protected void ApplyViewportMaterial()
         {
-            if (viewportMaterial != null)
+            var target = ResolveViewportMaterial();
+            if (target == null)
             {
-                viewportMaterial.SetVector("_SubPixelOffset", _SubPixelOffset);
-                viewportMaterial.SetFloat("_ZoomLevel", _ZoomLevel);
-                viewportMaterial.SetFloat("_EdgeMargin", EdgeMarginTexels);
+                return;
             }
+
+            target.SetVector("_SubPixelOffset", _SubPixelOffset);
+            target.SetFloat("_ZoomLevel", _ZoomLevel);
+            target.SetFloat("_EdgeMargin", EdgeMarginTexels);
+        }
+
+        /// <summary>
+        /// The material this camera writes and its `RawImage` samples: a runtime copy of the authored
+        /// viewport material, from <see cref="ViewportMaterialRuntime"/>. The authored asset is never
+        /// written, so a play pass cannot leave its numbers on disk and an edit-time pass writes nothing
+        /// at all.
+        ///
+        /// Edit Mode answers null, and `ApplyViewportMaterial` then writes nothing. The copy exists for the
+        /// running game; in Edit Mode the drawer keeps the authored asset and the numbers it states
+        /// (`_EdgeMargin: 2`, `_SubPixelOffset: 0`, and the 1x `_ZoomLevel`), which is the state an
+        /// authored scene is in.
+        /// </summary>
+        protected Material ResolveViewportMaterial()
+        {
+            if (viewportMaterial == null || !Application.isPlaying)
+            {
+                return null;
+            }
+
+            var copy = ViewportMaterialRuntime.Acquire(viewportMaterial);
+            if (outputImage != null && outputImage.material != copy)
+            {
+                outputImage.material = copy;
+            }
+
+            return copy;
+        }
+
+        /// <summary>
+        /// The authored viewport material this camera was assigned. A read for a consumer that must know
+        /// which asset its copy came from.
+        /// </summary>
+        public Material GetAuthoredViewportMaterial() => viewportMaterial;
+
+        private void OnDestroy()
+        {
+            ViewportMaterialRuntime.Release(viewportMaterial);
         }
 
         public void Update()
